@@ -2,10 +2,29 @@
   "hotkey": "Alt+T",
   "target_lang": "zh-CN",
   "mode": "ocr",
-  "provider": {
-    "type": "openai",
-    "base_url": "https://api.example.com/v1",
-    "api_key": "sk-xxx",
-    "model": "gpt-4o-mini"
+  "ocr_lang": "auto",
+  "engine": "edge",
+  "fallback": ["bing", "google_free"],
+  "engines": {
+    "edge": {},
+    "bing": {},
+    "google_free": {
+      "proxy": "http://127.0.0.1:7897"
+    },
+    "microsoft": {
+      "api_key": "在此填写你的 key",
+      "region": "eastasia"
+    },
+    "deepl": {
+      "api_key": "在此填写你的 key"
+    },
+    "deeplx": {
+      "base_url": "http://127.0.0.1:1188/translate"
+    },
+    "openai": {
+      "base_url": "https://api.example.com/v1",
+      "api_key": "在此填写你的 key",
+      "model": "gpt-4o-mini"
+    }
   }
 }

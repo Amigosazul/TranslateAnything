@@ -4,7 +4,8 @@
 
 ## 当前状态（2026-11-16）
 
-- 项目处于**文档阶段，还没有任何代码**。先读 `docs/` 下三份文档再动手。
+- **M1 开发中**：Tauri 骨架、截屏、OCR、四种翻译 Provider、遮罩框选、译文浮窗已实现并能编译运行；尚未提交。动手前先读 `docs/` 下三份文档。
+- 本机下载 crates / 访问境外接口走 Clash：`HTTP(S)_PROXY=http://127.0.0.1:7897`（环境变量里原有的 51828 不可用）。
 - 技术选型、交互细节均已在文档中定稿，不要推翻重来；有疑问先问用户。
 - 开发环境：Node 22 + pnpm、Rust 1.100（stable-msvc）已装好；VS Build Tools 收尾中；**英文 OCR 语言包缺失**、环境变量代理会导致 HTTPS 失败——详见 `docs/03-开发环境.md` 第 0 步。
 - 仓库已 `git init`（main 分支），尚无提交。
@@ -13,7 +14,7 @@
 
 1. 技术栈：**Tauri 2 + Rust**（前端任选轻量方案，见技术方案文档）。
 2. 翻译链路：**默认 OCR + 翻译 API**；OCR 用 Windows 原生 `Windows.Media.Ocr`（离线、免依赖）。
-3. 翻译 API：抽象成 **Provider 接口，必须可配置**（base URL / API key / 模型名），先实现 OpenAI 兼容协议一种。
+3. 翻译 API：抽象成 **Provider 接口，必须可配置**。**默认用传统翻译引擎、不走大模型**（2026-11-16 用户改定）：默认 `edge`（免 key 的 Edge 翻译接口，失败回退 Bing 网页版），可选 Google 免费接口、微软/DeepL/Google 官方 API、自建 DeepLX、OpenAI 兼容大模型。配置支持同时存多个引擎 + 主用引擎 + 回退顺序，为后续设置界面让用户自行配置预留（引擎清单见 `translate::CATALOG` / `engine_catalog` 命令）。不使用网上流传的 API key 或逆向得到的签名私钥。
 4. 视觉直译模式（VLM 直接看图翻译）作为**扩展点预留**，不在第一版实现。
 
 ## 文档索引

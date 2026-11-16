@@ -4,7 +4,7 @@
 
 - 技术栈：Tauri 2 + Rust + Vite（Windows 优先）
 - OCR：Windows 原生 `Windows.Media.Ocr`（离线）
-- 翻译：可配置的 OpenAI 兼容 API（base URL / key / 模型均可配）
+- 翻译：默认免 key 的微软 Edge 翻译（失败自动回退 Bing 网页版），可选 Google 免费接口、微软/DeepL/Google 官方 API、DeepLX、OpenAI 兼容大模型
 
 ## 文档
 
@@ -19,11 +19,11 @@
 
 ## 当前进度
 
-📋 文档阶段 — 代码尚未开始。从 `docs/03-开发环境.md` 验证工具链开始。
+🚧 M1 开发中 — 快捷键 → 框选 → 截屏 → OCR → 翻译 → 浮窗显示的链路已打通。
 
 ## 配置
 
-复制 [config.example.json](config.example.json) 到 `~/.translate-filter/config.json`，填入自己的 base URL / API key / 模型名。真实配置不要提交到仓库。
+不写配置也能用（默认 `edge` 引擎免 key）。需要切换引擎、配置回退顺序或代理时，复制 [config.example.json](config.example.json) 到 `~/.translate-filter/config.json` 修改，字段说明见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“翻译 Provider 抽象”一节。
 
 ## 许可证
 

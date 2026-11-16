@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>翻译滤镜</title>
+    <link rel="stylesheet" href="/src/panel/panel.css" />
+  </head>
+  <body>
+    <div id="card" data-tauri-drag-region>
+      <div id="content" data-tauri-drag-region>
+        <div id="status" data-tauri-drag-region>识别翻译中…</div>
+        <div id="text" hidden></div>
+      </div>
+      <div id="toolbar">
+        <button id="btn-close" title="关闭（Esc）">✕</button>
+      </div>
+    </div>
+    <script type="module" src="/src/panel/main.ts"></script>
+  </body>
+</html>
