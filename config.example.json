@@ -1,0 +1,11 @@
+{
+  "hotkey": "Alt+T",
+  "target_lang": "zh-CN",
+  "mode": "ocr",
+  "provider": {
+    "type": "openai",
+    "base_url": "https://api.example.com/v1",
+    "api_key": "sk-xxx",
+    "model": "gpt-4o-mini"
+  }
+}

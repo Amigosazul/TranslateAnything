@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 个人配置（真实配置放在 ~/.translate-filter/config.json，这里防误放）
+config.json
+.env
+.env.*
+
+# 日志与系统文件
+*.log
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Claude Code 本地设置
+.claude/settings.local.json
