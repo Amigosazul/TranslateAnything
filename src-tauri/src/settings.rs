@@ -6,7 +6,7 @@ use crate::{store, translate};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const SETTINGS_LABEL: &str = "settings";
 
@@ -32,7 +32,13 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
 pub struct SettingsView {
     config: Config,
     config_path: String,
+    /// 配置文件大小（字节），文件还没创建时为 0
+    config_size: u64,
     db_path: String,
+    /// 译文库大小（字节，含预写日志）
+    db_size: u64,
+    /// 译文库是否放在了自定义位置
+    db_custom: bool,
     /// 当前目标语言的内置术语表
     builtin_glossary: BTreeMap<String, String>,
 }
@@ -40,17 +46,23 @@ pub struct SettingsView {
 #[tauri::command]
 pub fn settings_get() -> Result<SettingsView, String> {
     let config = config::load()?;
+    let config_path = config::config_path();
     Ok(SettingsView {
         builtin_glossary: translate::builtin_glossary(&config.target_lang),
+        db_custom: !config.store_dir.trim().is_empty(),
         config,
-        config_path: config::config_path().map(|p| p.display().to_string()).unwrap_or_default(),
+        config_size: config_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len()),
+        config_path: config_path.map(|p| p.display().to_string()).unwrap_or_default(),
         db_path: store::db_path().map(|p| p.display().to_string()).unwrap_or_default(),
+        db_size: store::db_size(),
     })
 }
 
 /// 保存整份配置并立即生效（快捷键除外，需重启）
 #[tauri::command]
-pub fn settings_save(app: AppHandle, config: Config) -> Result<(), String> {
+pub fn settings_save(app: AppHandle, mut config: Config) -> Result<(), String> {
+    // 译文库位置只能通过 store_relocate 修改（要连同文件一起搬），这里沿用磁盘上的值
+    config.store_dir = config::load().map(|c| c.store_dir).unwrap_or_default();
     config::save(&config)?;
     immersive::reload(&app);
     Ok(())
@@ -130,4 +142,97 @@ pub fn store_clear(keep_manual: bool) -> Result<usize, String> {
 #[tauri::command]
 pub fn open_settings_window(app: AppHandle) -> Result<(), String> {
     open_settings(&app)
+}
+
+/// 当前目标语言的译文库概况
+#[tauri::command]
+pub fn store_stats() -> Result<store::Stats, String> {
+    let lang = config::load()?.target_lang;
+    store::stats(&lang)
+}
+
+/// 用已保存的配置测试某个引擎
+#[tauri::command]
+pub async fn engine_test(id: String) -> Result<translate::EngineTest, String> {
+    let cfg = config::load()?;
+    translate::test_engine(&cfg, &id).await
+}
+
+/// 从设置窗口发起框选：先把设置窗口收起来，免得挡住要翻译的内容，也免得被截进画面
+#[tauri::command]
+pub async fn overlay_start(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
+        let _ = w.minimize();
+    }
+    // 等最小化动画结束再出遮罩
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    tauri::async_runtime::spawn_blocking(move || crate::commands::open_overlay(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+pub struct OcrLanguage {
+    tag: String,
+    name: String,
+}
+
+/// 系统已安装的 OCR 语言
+#[tauri::command]
+pub async fn ocr_languages() -> Result<Vec<OcrLanguage>, String> {
+    tauri::async_runtime::spawn_blocking(crate::ocr::installed_languages)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|v| v.into_iter().map(|(tag, name)| OcrLanguage { tag, name }).collect())
+}
+
+/// 当前打开的翻译框个数
+#[tauri::command]
+pub fn frames_count(app: AppHandle) -> usize {
+    crate::live::frame_count(&app)
+}
+
+/// 选择译文库的新位置：弹出文件夹选择框，选好后把译文库搬过去。返回新路径；用户取消时返回 None
+#[tauri::command]
+pub async fn store_pick_and_relocate(app: AppHandle) -> Result<Option<String>, String> {
+    let owner = app
+        .get_webview_window(SETTINGS_LABEL)
+        .and_then(|w| w.hwnd().ok())
+        .map_or(0, |h| h.0 as isize);
+    let initial = store::db_dir();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        crate::dialog::pick_folder(owner, "选择译文库存放的文件夹", initial.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let Some(dir) = picked else { return Ok(None) };
+    let path = store::relocate(&dir)?;
+    let _ = app.emit("config-changed", ());
+    Ok(Some(path.display().to_string()))
+}
+
+/// 把译文库搬回默认的数据目录
+#[tauri::command]
+pub fn store_reset_location(app: AppHandle) -> Result<String, String> {
+    let path = store::relocate("")?;
+    let _ = app.emit("config-changed", ());
+    Ok(path.display().to_string())
+}
+
+/// 在资源管理器中定位配置文件（`config`）或译文库（`store`）
+#[tauri::command]
+pub fn reveal_file(which: String) -> Result<(), String> {
+    let path = match which.as_str() {
+        "config" => config::config_path(),
+        "store" => store::db_path(),
+        _ => None,
+    }
+    .ok_or("未知的文件")?;
+    crate::dialog::reveal(&path)
+}
+
+/// 关闭所有翻译框，返回关闭的个数
+#[tauri::command]
+pub fn frames_close_all(app: AppHandle) -> usize {
+    crate::live::close_all_frames(&app)
 }

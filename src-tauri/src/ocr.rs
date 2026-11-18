@@ -48,6 +48,21 @@ pub fn recognize(image: &RgbaImage, lang_pref: &str, target_lang: &str) -> Resul
     recognize_inner(image, lang_pref, target_lang).map_err(|e| format!("OCR 失败：{e}"))
 }
 
+/// 系统已安装的 OCR 语言：（语言标签，显示名），如 ("en-US", "English (United States)")
+pub fn installed_languages() -> Result<Vec<(String, String)>, String> {
+    unsafe {
+        let _ = RoInitialize(RO_INIT_MULTITHREADED);
+    }
+    let list = || -> windows::core::Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        for lang in OcrEngine::AvailableRecognizerLanguages()? {
+            out.push((lang.LanguageTag()?.to_string_lossy(), lang.DisplayName()?.to_string_lossy()));
+        }
+        Ok(out)
+    };
+    list().map_err(|e| format!("读取 OCR 语言失败：{e}"))
+}
+
 fn recognize_inner(
     image: &RgbaImage,
     lang_pref: &str,

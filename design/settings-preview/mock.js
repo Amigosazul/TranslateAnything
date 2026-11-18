@@ -1,0 +1,74 @@
+// 模拟 Tauri 后端的数据与命令，只在界面预览页使用
+(() => {
+  const now = Math.floor(Date.now() / 1000);
+  const config = {
+    hotkey: "Alt+T",
+    target_lang: "zh-CN",
+    persist_cache: true,
+    mode: "ocr",
+    ocr_lang: "auto",
+    engine: "edge",
+    fallback: ["bing"],
+    engines: { edge: { base_url: "", api_key: "", region: "", model: "", proxy: null }, openai: { base_url: "https://api.example.com/v1", api_key: "sk-test", region: "", model: "gpt-4o-mini", proxy: null } },
+    builtin_glossary: true,
+    glossary: { New: "新建", Settings: "设置", Projects: "项目" },
+    immersive: {
+      enabled: true,
+      hotkey: "Alt+Shift+T",
+      targets: [
+        { name: "reclaude", enabled: true, exe: "C:\\Users\\Demo\\AppData\\Local\\AnthropicClaude\\claude.exe", args: "", port: 39222, url_prefixes: ["https://claude.ai/"], skip_selectors: [".chat-message"] },
+        { name: "Visual Studio Code", enabled: true, exe: "C:\\Program Files\\Microsoft VS Code\\Code.exe", args: "", port: 39223, url_prefixes: [], skip_selectors: [] },
+        { name: "Notion", enabled: false, exe: "", args: "", port: 39224, url_prefixes: [], skip_selectors: [] },
+      ],
+    },
+  };
+  const statuses = [
+    { port: 39222, name: "reclaude", enabled: true, state: "attached", message: "", pages: [{ id: "1", url: "https://claude.ai/new", title: "Claude" }, { id: "2", url: "https://claude.ai/code", title: "Claude Code" }], show: true, translated: 1284, engine_batches: 37 },
+    { port: 39223, name: "Visual Studio Code", enabled: true, state: "no_port", message: "程序正在运行，但没有带调试端口启动。点「以沉浸模式重启」即可。", pages: [], show: false, translated: 0, engine_batches: 0 },
+    { port: 39224, name: "Notion", enabled: false, state: "disabled", message: "", pages: [], show: false, translated: 0, engine_batches: 0 },
+  ];
+  const words = [["New chat", "新聊天"], ["Search conversations", "搜索对话"], ["Recents", "最近"], ["Start a new project", "开始一个新项目"], ["Upload files", "上传文件"], ["Share", "分享"], ["Copy link", "复制链接"], ["Rename", "重命名"], ["Delete conversation", "删除对话"], ["Model", "模型"], ["Extended thinking", "扩展思考"], ["Add to project", "添加到项目"]];
+  const rows = words.map(([s, t], i) => ({ lang: "zh-CN", source: s, target: t, engine: i % 4 === 0 ? "手工" : "edge", manual: i % 4 === 0, hits: 120 - i * 9, used_at: now - i * 4000 }));
+  const builtin = { Cancel: "取消", Close: "关闭", Copy: "复制", Edit: "编辑", Help: "帮助", OK: "确定", Paste: "粘贴", Save: "保存", Undo: "撤销" };
+  const catalog = [
+    { id: "edge", name: "微软翻译（免费）", needs_key: false, official: false, fields: ["proxy"], note: "Edge 浏览器内置翻译接口，失败自动回退 Bing 网页版；国内可直连" },
+    { id: "bing", name: "Bing 网页翻译（免费）", needs_key: false, official: false, fields: ["proxy"], note: "Bing 网页版接口；国内可直连" },
+    { id: "google_free", name: "Google 翻译（免费）", needs_key: false, official: false, fields: ["base_url", "proxy"], note: "国内需配置代理；调用频繁会被限流" },
+    { id: "microsoft", name: "微软翻译（官方 API）", needs_key: true, official: true, fields: ["api_key", "region", "base_url", "proxy"], note: "Azure Translator 资源，免费层每月 200 万字符" },
+    { id: "deepl", name: "DeepL（官方 API）", needs_key: true, official: true, fields: ["api_key", "base_url", "proxy"], note: "免费版每月 50 万字符" },
+    { id: "deeplx", name: "DeepLX（自建）", needs_key: false, official: false, fields: ["base_url", "api_key", "proxy"], note: "自建 DeepLX 服务地址" },
+    { id: "google", name: "Google Cloud 翻译（官方 API）", needs_key: true, official: true, fields: ["api_key", "base_url", "proxy"], note: "需启用 Cloud Translation API；国内需配置代理" },
+    { id: "openai", name: "大模型（OpenAI 兼容）", needs_key: true, official: true, fields: ["base_url", "api_key", "model", "proxy"], note: "任意 OpenAI 兼容服务" },
+  ];
+  const handlers = {
+    settings_get: () => ({ config: JSON.parse(JSON.stringify(config)), config_path: "C:\\Users\\Demo\\.translate-anything\\config.json", db_path: "C:\\Users\\Demo\\.translate-anything\\translations.db", config_size: 1843, db_size: 2457600, db_custom: false, builtin_glossary: builtin }),
+    engine_catalog: () => catalog,
+    store_stats: () => ({ total: 8421, manual: 37, hits: 152390 }),
+    engine_test: async (a) => { await new Promise((r) => setTimeout(r, 600)); if (a.id === "openai") throw "网络错误：连接超时"; return { engine: a.id, source: "Hello! Screen text, translated anywhere.", text: "你好！屏幕上的文字，随处可译。", ms: 238 }; },
+    overlay_start: () => null,
+    ocr_languages: () => [{ tag: "en-US", name: "英语(美国)" }, { tag: "zh-Hans-CN", name: "中文(简体，中国)" }],
+    frames_count: () => 2,
+    frames_close_all: () => 2,
+    store_pick_and_relocate: () => null,
+    store_reset_location: () => "",
+    reveal_file: () => null,
+    settings_save: (a) => { Object.assign(config, JSON.parse(JSON.stringify(a.config))); },
+    immersive_status: () => statuses,
+    immersive_detect: () => [{ name: "Slack", exe: "C:\\Users\\Demo\\AppData\\Local\\slack\\slack.exe", port: null, configured: false }, { name: "reclaude", exe: "C:\\...\\claude.exe", port: 39222, configured: true }],
+    store_query: (a) => { const k = (a.keyword || "").toLowerCase(); const r = rows.filter((x) => (!a.manualOnly || x.manual) && (!k || x.source.toLowerCase().includes(k) || x.target.includes(k))); return { total: r.length, rows: r }; },
+    store_set: () => null, store_delete: () => null, store_clear: () => 0,
+    immersive_set_show: () => null, immersive_set_enabled: () => null, immersive_launch: () => "已发送",
+  };
+  let cb = 0;
+  window.__TAURI_INTERNALS__ = {
+    transformCallback: () => ++cb,
+    unregisterCallback: () => {},
+    invoke: async (cmd, args) => {
+      if (cmd.startsWith("plugin:event|")) return cb;
+      const f = handlers[cmd];
+      if (!f) { console.warn("未模拟的命令", cmd, args); return null; }
+      return f(args || {});
+    },
+  };
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+})();

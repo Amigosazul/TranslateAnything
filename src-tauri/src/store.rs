@@ -10,16 +10,43 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 单条原文超过这个长度就不缓存（多半是整段正文，复用率低）
 const MAX_SOURCE_CHARS: usize = 4000;
 
-static STORE: OnceLock<Option<Mutex<Connection>>> = OnceLock::new();
+/// 数据库文件名
+const DB_FILE: &str = "translations.db";
+
+/// 连接状态：第一次用到时才打开；打不开就记成失败，本次运行不再反复尝试（迁移位置后会重置）
+enum Slot {
+    Unopened,
+    Open(Connection),
+    Failed,
+}
+
+static STORE: Mutex<Slot> = Mutex::new(Slot::Unopened);
+
+/// 译文库所在文件夹：配置了 `store_dir` 用它，否则用数据目录
+pub fn db_dir() -> Option<PathBuf> {
+    let custom = crate::config::load().map(|c| c.store_dir).unwrap_or_default();
+    let custom = custom.trim();
+    if custom.is_empty() { crate::config::data_dir() } else { Some(PathBuf::from(custom)) }
+}
 
 pub fn db_path() -> Option<PathBuf> {
-    crate::config::data_dir().map(|d| d.join("translations.db"))
+    db_dir().map(|d| d.join(DB_FILE))
+}
+
+/// 数据库文件及其预写日志的总大小（字节）
+pub fn db_size() -> u64 {
+    let Some(p) = db_path() else { return 0 };
+    ["", "-wal"]
+        .iter()
+        .filter_map(|ext| std::fs::metadata(format!("{}{ext}", p.display())).ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 fn open(path: &PathBuf) -> rusqlite::Result<Connection> {
@@ -50,19 +77,82 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn conn() -> Option<&'static Mutex<Connection>> {
-    STORE
-        .get_or_init(|| {
-            let path = db_path()?;
-            match open(&path) {
-                Ok(c) => Some(Mutex::new(c)),
+/// 在译文库连接上执行 f；库打不开时返回 None
+fn with_db<T>(f: impl FnOnce(&mut Connection) -> T) -> Option<T> {
+    let mut slot = STORE.lock().unwrap();
+    if matches!(*slot, Slot::Unopened) {
+        *slot = match db_path() {
+            Some(path) => match open(&path) {
+                Ok(c) => Slot::Open(c),
                 Err(e) => {
                     eprintln!("打开译文缓存失败，本次运行不做持久缓存：{}\n{e}", path.display());
-                    None
+                    Slot::Failed
                 }
-            }
-        })
-        .as_ref()
+            },
+            None => Slot::Failed,
+        };
+    }
+    match &mut *slot {
+        Slot::Open(c) => Some(f(c)),
+        _ => None,
+    }
+}
+
+/// 把译文库搬到新文件夹（空字符串 = 搬回默认的数据目录），成功后写入配置。
+/// 先合并预写日志、关闭连接，再移动文件；目标处已有译文库时拒绝，免得覆盖。
+pub fn relocate(new_dir: &str) -> Result<PathBuf, String> {
+    let mut cfg = crate::config::load()?;
+    let new_dir = new_dir.trim();
+    let target_dir = if new_dir.is_empty() {
+        crate::config::data_dir().ok_or("无法定位用户目录")?
+    } else {
+        PathBuf::from(new_dir)
+    };
+    let old = db_path().ok_or("无法定位译文库")?;
+    let new = target_dir.join(DB_FILE);
+    if same_file(&old, &new) {
+        return Ok(new);
+    }
+    if new.exists() {
+        return Err(format!("目标文件夹里已经有一个译文库：{}", new.display()));
+    }
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建文件夹：{e}"))?;
+
+    let mut slot = STORE.lock().unwrap();
+    if let Slot::Open(c) = &*slot {
+        let _ = c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+    // 关闭连接（Windows 下文件打开时无法移动）；之后按新位置重新打开
+    *slot = Slot::Unopened;
+    if old.exists() {
+        move_file(&old, &new)?;
+        for ext in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", old.display()));
+        }
+    }
+    cfg.store_dir = if new_dir.is_empty() { String::new() } else { target_dir.display().to_string() };
+    if let Err(e) = crate::config::save(&cfg) {
+        // 配置没写进去：把文件搬回原处，保持一致
+        let _ = move_file(&new, &old);
+        return Err(e);
+    }
+    Ok(new)
+}
+
+fn same_file(a: &PathBuf, b: &PathBuf) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// 移动文件；跨磁盘时改名会失败，退回复制再删除
+fn move_file(from: &PathBuf, to: &PathBuf) -> Result<(), String> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to).map_err(|e| format!("移动译文库失败：{e}"))?;
+    std::fs::remove_file(from).map_err(|e| format!("已复制到新位置，但删除旧文件失败：{e}"))
 }
 
 fn now() -> i64 {
@@ -71,12 +161,13 @@ fn now() -> i64 {
 
 /// 批量查询，返回命中的（原文 → 译文），同时累计命中次数
 pub fn get_many(lang: &str, sources: &[String]) -> HashMap<String, String> {
-    let Some(c) = conn() else { return HashMap::new() };
-    let c = c.lock().unwrap();
-    get_many_in(&c, lang, sources).unwrap_or_else(|e| {
-        eprintln!("查询译文缓存失败：{e}");
-        HashMap::new()
+    with_db(|c| {
+        get_many_in(c, lang, sources).unwrap_or_else(|e| {
+            eprintln!("查询译文缓存失败：{e}");
+            HashMap::new()
+        })
     })
+    .unwrap_or_default()
 }
 
 fn get_many_in(c: &Connection, lang: &str, sources: &[String]) -> rusqlite::Result<HashMap<String, String>> {
@@ -99,11 +190,11 @@ fn get_many_in(c: &Connection, lang: &str, sources: &[String]) -> rusqlite::Resu
 
 /// 批量写入自动翻译结果；用户手工改过的条目不覆盖
 pub fn put_many(lang: &str, pairs: &[(String, String)], engine: &str) {
-    let Some(c) = conn() else { return };
-    let mut c = c.lock().unwrap();
-    if let Err(e) = put_many_in(&mut c, lang, pairs, engine) {
-        eprintln!("写入译文缓存失败：{e}");
-    }
+    with_db(|c| {
+        if let Err(e) = put_many_in(c, lang, pairs, engine) {
+            eprintln!("写入译文缓存失败：{e}");
+        }
+    });
 }
 
 fn put_many_in(c: &mut Connection, lang: &str, pairs: &[(String, String)], engine: &str) -> rusqlite::Result<()> {
@@ -130,16 +221,17 @@ fn put_many_in(c: &mut Connection, lang: &str, pairs: &[(String, String)], engin
 
 /// 最近常用的若干条译文，供沉浸模式注入页面时预加载（避免首屏先闪一下原文）
 pub fn recent(lang: &str, limit: usize) -> Vec<(String, String)> {
-    let Some(c) = conn() else { return Vec::new() };
-    let c = c.lock().unwrap();
-    let r = (|| -> rusqlite::Result<Vec<(String, String)>> {
-        let mut stmt = c.prepare_cached(
-            "SELECT source, target FROM translations WHERE lang = ?1 ORDER BY used_at DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![lang, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect()
-    })();
-    r.unwrap_or_default()
+    with_db(|c| {
+        let r = (|| -> rusqlite::Result<Vec<(String, String)>> {
+            let mut stmt = c.prepare_cached(
+                "SELECT source, target FROM translations WHERE lang = ?1 ORDER BY used_at DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![lang, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect()
+        })();
+        r.unwrap_or_default()
+    })
+    .unwrap_or_default()
 }
 
 // ───────────────────────── 管理（设置界面用） ─────────────────────────
@@ -164,9 +256,7 @@ pub struct Page {
 }
 
 fn with_conn<T>(f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
-    let c = conn().ok_or("译文库无法打开")?;
-    let mut c = c.lock().unwrap();
-    f(&mut c).map_err(|e| format!("译文库操作失败：{e}"))
+    with_db(f).ok_or("译文库无法打开")?.map_err(|e| format!("译文库操作失败：{e}"))
 }
 
 /// 分页查询：按最近使用排序；`keyword` 同时匹配原文和译文；`manual_only` 只看手工译文
@@ -201,6 +291,29 @@ fn query_in(c: &Connection, lang: &str, keyword: &str, manual_only: bool, offset
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(Page { total, rows })
+}
+
+/// 某个目标语言的译文库概况（设置窗口概览页用）
+#[derive(Debug, Default, serde::Serialize)]
+pub struct Stats {
+    /// 条数
+    pub total: i64,
+    /// 其中手工译文
+    pub manual: i64,
+    /// 累计命中次数（每命中一次就少请求一次引擎）
+    pub hits: i64,
+}
+
+pub fn stats(lang: &str) -> Result<Stats, String> {
+    with_conn(|c| stats_in(c, lang))
+}
+
+fn stats_in(c: &Connection, lang: &str) -> rusqlite::Result<Stats> {
+    c.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(manual), 0), COALESCE(SUM(hits), 0) FROM translations WHERE lang = ?1",
+        params![lang],
+        |r| Ok(Stats { total: r.get(0)?, manual: r.get(1)?, hits: r.get(2)? }),
+    )
 }
 
 /// 手工改译（不存在则新增），标记为手工译文
@@ -288,6 +401,9 @@ mod tests {
         let manual = query_in(&c, "zh-CN", "", true, 0, 10).unwrap();
         assert_eq!(manual.total, 2);
         assert!(manual.rows.iter().all(|r| r.manual));
+        let s = stats_in(&c, "zh-CN").unwrap();
+        assert_eq!((s.total, s.manual), (4, 2));
+        assert_eq!(stats_in(&c, "ja").unwrap().total, 0, "空库也能统计");
     }
 
     #[test]

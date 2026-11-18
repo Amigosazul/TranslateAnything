@@ -28,6 +28,9 @@ pub struct Config {
     pub engines: BTreeMap<String, ProviderConfig>,
     /// 译文写入本地库（`~/.translate-anything/translations.db`），相同原文下次直接查库不再请求引擎
     pub persist_cache: bool,
+    /// 译文库所在文件夹；留空 = 数据目录。请在设置窗口里修改（会连同文件一起搬过去）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub store_dir: String,
     /// 使用内置的界面常用词术语表（如 New → 新建），避免引擎翻单个词时没有上下文而翻错
     pub builtin_glossary: bool,
     /// 自定义术语表：原文 → 译文，整条精确匹配，优先于内置术语表、译文库和引擎。
@@ -137,6 +140,7 @@ impl Default for Config {
             fallback: Vec::new(),
             engines: BTreeMap::new(),
             persist_cache: true,
+            store_dir: String::new(),
             builtin_glossary: true,
             glossary: BTreeMap::new(),
             immersive: ImmersiveConfig::default(),

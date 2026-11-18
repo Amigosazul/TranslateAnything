@@ -1,4 +1,5 @@
 mod capture;
+mod dialog;
 mod commands;
 mod config;
 mod immersive;
@@ -98,6 +99,15 @@ pub fn run() {
             settings::store_delete,
             settings::store_clear,
             settings::open_settings_window,
+            settings::store_stats,
+            settings::engine_test,
+            settings::overlay_start,
+            settings::ocr_languages,
+            settings::frames_count,
+            settings::frames_close_all,
+            settings::store_pick_and_relocate,
+            settings::store_reset_location,
+            settings::reveal_file,
         ])
         .build(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

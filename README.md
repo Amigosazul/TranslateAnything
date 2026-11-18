@@ -1,71 +1,133 @@
 <p align="center">
-  <img src="design/logo/icon.svg" width="128" alt="随译 Logo">
+  <img src="design/logo/icon.svg" width="112" alt="随译">
 </p>
 
-<h1 align="center">随译 · TranslateAnything</h1>
+<h1 align="center">随译 Translate Anything</h1>
 
-<p align="center">屏幕上的文字，随处可译。</p>
+<p align="center"><b>屏幕上的文字，随处可译。</b></p>
 
-屏幕上的文字随处可译：软件界面用沉浸模式原地改写成中文，图片、视频等任意画面用悬浮窗模式覆盖译文；后续计划支持音频同声传译和语音转字幕。
+<p align="center">
+  <a href="https://github.com/Richard2091/Translate-Anything/releases/latest"><img src="https://img.shields.io/github/v/release/Richard2091/Translate-Anything?label=%E4%B8%8B%E8%BD%BD&color=3d7bff" alt="下载"></a>
+  <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%2010%20%2F%2011-27c6ec" alt="平台">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-MIT-a3adc2" alt="许可证"></a>
+</p>
 
-悬浮窗模式：快捷键框选屏幕任意区域，框内文字被实时识别翻译，译文按原文位置覆盖显示（沉浸式），看起来就像软件本身支持了这种语言；内容滚动、变化时译文跟着刷新，翻译框不影响下方软件的操作。交互参考 PixPin，只做翻译，不做图像处理。
+<p align="center">
+  <img src="docs/images/settings-dashboard.png" width="820" alt="随译设置窗口：概览">
+</p>
 
-- 技术栈：Tauri 2 + Rust + Vite（Windows 优先）
-- OCR：Windows 原生 `Windows.Media.Ocr`（离线）
-- 翻译：默认免 key 的微软 Edge 翻译（失败自动回退 Bing 网页版），可选 Google 免费接口、微软/DeepL/Google 官方 API、DeepLX、OpenAI 兼容大模型
+随译把屏幕上看到的外文直接变成中文：软件界面在原处改写，图片、视频等任意画面用浮窗盖上译文。不用复制粘贴，也不用切换窗口。
 
-## 文档
+## 两种翻译方式
+
+### 悬浮窗模式：框哪里，译哪里
+
+按 <kbd>Alt</kbd> + <kbd>T</kbd> 框选屏幕上的任意区域，随译识别其中的文字，把译文按原来的位置盖上去，看起来就像软件本身就是中文的。
+
+- **实时跟随**：内容滚动或变化时译文自动刷新，翻译框可以随意拖动、缩放
+- **不挡操作**：鼠标可以穿过翻译框，照常点击下面的软件
+- **离线识别**：文字识别用 Windows 自带的引擎，截图不出本机
+- **随处可用**：图片、视频、扫描件、远程桌面……只要屏幕上看得见就能翻
+
+### 沉浸模式：软件界面原地变中文
+
+对支持的应用，随译直接在应用内部把界面文字换成译文，不修改软件本身的任何文件。按 <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> 随时在原文和译文之间切换。
+
+- 目前支持 **Electron / Chromium 内核**的桌面应用（大量常用软件都是这类）
+- 自动识别正在运行的应用，一键以沉浸模式启动
+- 身份校验：只接管你添加过的程序，端口背后换了程序会拒绝接管
+- 输入框、代码区等不该翻的地方自动跳过，聊天正文之类的区域也可以自己指定不翻
+
+<!-- 沉浸模式效果图：请用没有登录个人账号、没有私人内容的干净客户端截取，放到 docs/images/immersive-demo.png 后在这里引用 -->
+
+<table>
+  <tr>
+    <td><img src="docs/images/settings-overlay.png" alt="悬浮窗模式设置"></td>
+    <td><img src="docs/images/settings-immersive.png" alt="沉浸模式设置"></td>
+  </tr>
+  <tr>
+    <td align="center">悬浮窗模式</td>
+    <td align="center">沉浸模式</td>
+  </tr>
+</table>
+
+## 翻译引擎，按需选择
+
+开箱即用，**不需要注册任何账号或填写密钥**。默认使用免费的微软翻译，失败时自动换用备选引擎。
+
+| 引擎 | 需要密钥 | 说明 |
+|---|:---:|---|
+| 微软翻译（免费） | — | 默认引擎，国内可直连 |
+| Bing 网页翻译（免费） | — | 国内可直连 |
+| Google 翻译（免费） | — | 国内需配置代理 |
+| 微软翻译（官方接口） | ✓ | 免费额度每月 200 万字符 |
+| DeepL（官方接口） | ✓ | 免费版每月 50 万字符 |
+| Google Cloud 翻译 | ✓ | 官方接口 |
+| DeepLX | 可选 | 自建服务 |
+| **大模型** | ✓ | 任意 OpenAI 兼容服务，译文更自然 |
+
+在"翻译引擎"页面一键切换**翻译引擎 / 大模型**，自由安排出错时的回退顺序，每个引擎都可以一键测速。
+
+<p align="center">
+  <img src="docs/images/settings-engines.png" width="820" alt="翻译引擎设置">
+</p>
+
+## 越用越快
+
+- **译文库**：翻译过的文字存在本地，再次遇到直接使用，不再联网请求。可以搜索、改译，改过的译文立即生效且不会被覆盖
+- **术语表**：固定某些词的译法（例如 New → 新建），内置一份常见界面用语
+- 译文库位置可以随时更改，文件会一并搬过去
+
+## 下载安装
+
+到 [Releases](https://github.com/Richard2091/Translate-Anything/releases/latest) 下载最新版本：
+
+| 你的电脑 | 下载 |
+|---|---|
+| 大多数电脑（Intel / AMD 处理器） | 文件名带 `x64` 的 `.exe`（企业批量部署可选 `.msi`） |
+| 骁龙等 ARM 处理器的电脑 | 文件名带 `arm64` 的 `.exe` |
+
+系统要求：Windows 10 / 11。安装包暂未做代码签名，首次运行时 Windows 可能提示"已保护你的电脑"，点"更多信息 → 仍要运行"即可。
+
+## 快速上手
+
+1. 安装后随译常驻在系统托盘，左键单击托盘图标打开设置窗口
+2. **框选翻译**：按 <kbd>Alt</kbd> + <kbd>T</kbd>，拖出一个区域，译文就出现了
+3. **沉浸模式**：在"沉浸模式"页点"识别正在运行的应用"，选中要翻译的软件，再点"以沉浸模式启动"
+4. 想换翻译引擎或接入大模型，到"翻译引擎"页设置；改完立即生效
+
+## 隐私
+
+- 文字识别完全在本机完成，截图不会上传
+- 识别出的文字会发送给你选择的翻译服务，用来获取译文；随译本身不收集、不上传任何数据
+- 设置、译文库都保存在本机的 `~/.translate-anything/` 目录
+- 沉浸模式会让目标应用临时开启本机调试端口（只监听本机），用完后正常重启该应用即可关闭
+
+## 规划中
+
+- 翻译过滤：自动跳过代码、路径、品牌名等不该翻的内容
+- 视觉直译：大模型直接看图翻译
+- 无感启动、开机自启
+- 音频同声传译、语音转字幕
+- macOS / Linux 版本
+
+## 参与开发
+
+技术栈：Tauri 2 + Rust + TypeScript。
+
+```bash
+pnpm install
+pnpm tauri dev
+```
 
 | 文档 | 内容 |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | 项目状态、已定决策（AI 会话上下文） |
-| [docs/01-需求说明.md](docs/01-需求说明.md) | 交互流程、功能清单、验收标准 |
-| [docs/02-技术方案.md](docs/02-技术方案.md) | 架构、模块、关键依赖、坑位 |
+| [docs/01-需求说明.md](docs/01-需求说明.md) | 功能清单、交互流程、验收标准 |
+| [docs/02-技术方案.md](docs/02-技术方案.md) | 架构、模块划分、配置字段、多平台打包 |
 | [docs/03-开发环境.md](docs/03-开发环境.md) | 工具链安装与验证 |
+| [design/logo/](design/logo/) | Logo 设计说明与生成脚本 |
 
-`recovered-chats/` 是立项时两次 AI 对话的存档，仅作历史参考。
-
-## Logo
-
-图形是"文中藏 A"：一个"文"字，交叉点以下的两笔加一道横正好是"A"；一道扫描线横穿交叉点，线下灰色是还没翻译的原文"A"，线上蓝色是已经改写好的"文"——对应随译"识别并原地改写"的核心动作。
-
-源文件在 [design/logo/](design/logo/)，都由 `build.mjs` 生成：
-
-| 文件 | 用途 |
-|---|---|
-| `icon.svg` | 应用图标（48px 及以上） |
-| `icon-small.svg` | 小尺寸加粗版（16～40px，字形放大、笔画加粗），打进 `icon.ico` 的小尺寸 |
-| `icon-bright.svg` | 亮色底备用版 |
-| `mark.svg` | 透明底标志，用于与文字组合 |
-| `tray.svg` | 托盘图标（透明底，深浅任务栏都可见） |
-
-改动后重新生成 SVG 并替换 `src-tauri/icons` 下的全套图标（含拼装 `icon.ico` 和托盘 `tray.png`）：
-
-```bash
-node design/logo/build.mjs --apply
-```
-
-替换图标后 Cargo 不一定会重新编译，需要先 `touch src-tauri/build.rs` 再构建。
-
-## 当前进度
-
-- ✅ **悬浮窗模式**：快捷键框选 → 截屏 → OCR → 翻译，译文按原位置覆盖显示，内容滚动/变化时实时跟随刷新；翻译框鼠标穿透、可拖动缩放，工具条可暂停、切换原文、关闭，支持多个翻译框并存。
-- ✅ **沉浸模式**：Electron / Chromium 内核应用（首个适配 reclaude 客户端）界面文字原地改写成译文，不改软件本体；译文本地库、术语表。
-- ✅ **管理界面**：系统托盘、设置窗口（按应用开关、身份校验、一键以沉浸模式启动、译文库查看与改译、术语表、常规设置）。
-- 🚧 **规划中**：翻译过滤（自动跳过代码、路径、品牌名等，判断带原因）、翻译引擎设置界面、无感启动、开机自启、可选的大模型引擎、多显示器。
-
-## 下载与平台
-
-到 [Releases](https://github.com/Richard2091/Translate-Anything/releases) 下载安装包。目前只支持 Windows 10/11：
-
-- Intel / AMD 处理器：文件名带 `x64` 的安装包（`.exe` 或 `.msi`）
-- 骁龙等 ARM 处理器：文件名带 `arm64` 的 `.exe`
-
-macOS / Linux 暂不支持，适配计划见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“多平台打包与发布”一节。
-
-## 配置
-
-不写配置也能用（默认 `edge` 引擎免 key）。需要切换引擎、配置回退顺序或代理时，复制 [config.example.json](config.example.json) 到 `~/.translate-anything/config.json`（旧版的 `~/.translate-filter` 目录会在首次启动时自动迁移） 修改，字段说明见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“翻译 Provider 抽象”一节。
+调整设置界面时可以不启动整个应用：`pnpm dev` 后打开 `http://localhost:1420/design/settings-preview/index.html`，用模拟数据在浏览器里预览。
 
 ## 许可证
 

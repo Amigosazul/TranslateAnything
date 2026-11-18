@@ -132,6 +132,22 @@ pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(),
     Ok(())
 }
 
+/// 当前打开的翻译框个数
+pub fn frame_count(app: &AppHandle) -> usize {
+    app.state::<LiveState>().frames.lock().unwrap().len()
+}
+
+/// 关闭所有翻译框；各自的刷新循环发现窗口没了会自行退出
+pub fn close_all_frames(app: &AppHandle) -> usize {
+    let labels: Vec<String> = app.state::<LiveState>().frames.lock().unwrap().keys().cloned().collect();
+    for label in &labels {
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.destroy();
+        }
+    }
+    labels.len()
+}
+
 #[tauri::command]
 pub fn frame_set_paused(window: WebviewWindow, state: tauri::State<'_, LiveState>, paused: bool) {
     if let Some(ctl) = state.frames.lock().unwrap().get(window.label()) {

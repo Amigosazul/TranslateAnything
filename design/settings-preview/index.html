@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>随译 · 设置（界面预览）</title>
+    <!-- 仅用于开发：模拟 Tauri 后端，在普通浏览器里预览设置窗口。不参与打包。 -->
+    <script src="./mock.js"></script>
+  </head>
+  <body>
+    <script type="module">
+      const html = await (await fetch("/settings.html")).text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      for (const el of doc.head.querySelectorAll("link[rel=stylesheet], style")) document.head.append(el);
+      document.body.innerHTML = doc.body.innerHTML.replace(/<script[\s\S]*?<\/script>/g, "");
+      for (const s of doc.body.querySelectorAll("script[src]")) await import(s.getAttribute("src"));
+      // 地址后加 #页面名 直接打开对应页面（截图用），如 #engines
+      const tab = location.hash.slice(1);
+      if (tab) setTimeout(() => document.querySelector(`#nav button[data-tab="${tab}"]`)?.click(), 300);
+    </script>
+  </body>
+</html>

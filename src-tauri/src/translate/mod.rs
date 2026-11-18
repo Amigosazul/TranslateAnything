@@ -243,6 +243,32 @@ async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<Str
 "))
 }
 
+/// 引擎测试结果（设置窗口"测试"按钮）
+#[derive(Debug, Serialize)]
+pub struct EngineTest {
+    pub engine: String,
+    /// 测试用原文与译文
+    pub source: String,
+    pub text: String,
+    /// 耗时（毫秒），含建立连接
+    pub ms: u64,
+}
+
+/// 用一句固定的英文测试某个已配置的引擎（不查缓存、不写译文库、不回退）
+pub async fn test_engine(cfg: &Config, id: &str) -> Result<EngineTest, String> {
+    const SAMPLE: &str = "Hello! Screen text, translated anywhere.";
+    let provider = cfg.engines.get(id).cloned().unwrap_or_default();
+    let kind = provider.kind_or(id);
+    let name = engine_name(&kind).to_string();
+    let start = std::time::Instant::now();
+    let text = create(&kind, &provider)
+        .map_err(|e| e.to_string())?
+        .translate(SAMPLE, &cfg.target_lang)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(EngineTest { engine: name, source: SAMPLE.into(), text, ms: start.elapsed().as_millis() as u64 })
+}
+
 // ───────────────────────── 公共工具 ─────────────────────────
 
 /// 免 key 接口伪装成浏览器时使用的 UA
