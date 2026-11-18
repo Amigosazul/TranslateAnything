@@ -1,6 +1,6 @@
-# 随译 TranslateAnything（原名 translate-filter）
+# 随译 Translate Anything（原名 translate-filter）
 
-中文名**随译**，英文名 **TranslateAnything**（2026-11-18 用户定名）。包名 `translate-anything`，Tauri identifier `com.richard.translateanything`（定了别再改，它决定系统里的数据目录）。仓库目录名仍可能是旧的 `translate-filter`。
+中文名**随译**，英文软件名 **Translate Anything**（中间空格，用于 `productName`、安装包与窗口外显示），GitHub 仓库 `Richard2091/Translate-Anything`（2026-11-18 用户定名）。包名 `translate-anything`（npm/Cargo 要求小写，不改），Tauri identifier `com.richard.translateanything`（定了别再改，它决定系统里的数据目录）。本地目录名仍是小写 `translate-anything`。
 
 定位：屏幕上的文字随处可译——软件界面走沉浸模式原地改写，图片/视频等任意画面走悬浮窗模式；后续规划音频同声传译、语音转字幕。
 
