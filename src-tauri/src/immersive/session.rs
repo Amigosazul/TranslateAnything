@@ -230,7 +230,8 @@ async fn answer(cdp: cdp::Cdp, ctx_id: i64, payload: String, app: AppHandle, sta
             return;
         }
     };
-    let expr = match translate::translate_batch_with_fallback(&cfg, &texts).await {
+    let start = std::time::Instant::now();
+    let expr = match translate::translate_batch_with_fallback(&cfg, &texts, "沉浸模式").await {
         Ok((translated, engine)) => {
             {
                 let mut s = status.lock().unwrap();
@@ -249,5 +250,13 @@ async fn answer(cdp: cdp::Cdp, ctx_id: i64, payload: String, app: AppHandle, sta
             format!("globalThis.__tf && __tf.failed({})", json!({ "texts": texts }))
         }
     };
+    let translated_at = start.elapsed();
     let _ = eval(&cdp, ctx_id, &expr).await;
+    tlog!(
+        "沉浸模式 本批 {} 条：翻译 {} · 回填页面 {} · 共 {}",
+        texts.len(),
+        crate::timing::ms(translated_at),
+        crate::timing::ms(start.elapsed() - translated_at),
+        crate::timing::ms(start.elapsed())
+    );
 }

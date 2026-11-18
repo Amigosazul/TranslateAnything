@@ -1,5 +1,7 @@
 #[macro_use]
 mod i18n;
+#[macro_use]
+mod timing;
 mod capture;
 mod dialog;
 mod commands;

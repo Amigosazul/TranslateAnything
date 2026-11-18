@@ -214,17 +214,29 @@ pub fn builtin_glossary(target_lang: &str) -> std::collections::BTreeMap<String,
 
 /// 批量翻译：术语表 → 本地译文库 → 翻译引擎（主引擎 + 回退），引擎结果写回译文库。
 /// 返回（与 `texts` 一一对应的译文，实际使用的引擎名；没有请求引擎时为"本地缓存"）
-pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Result<(Vec<String>, String), String> {
+/// `who` 只用于耗时日志，标明调用方（悬浮窗 / 沉浸模式）
+pub async fn translate_batch_with_fallback(
+    cfg: &Config,
+    texts: &[String],
+    who: &str,
+) -> Result<(Vec<String>, String), String> {
+    use crate::timing::ms;
+    use std::time::Instant;
+    let start = Instant::now();
     let lang = cfg.target_lang.as_str();
     let terms = glossary(cfg);
     let mut found: HashMap<String, String> = texts
         .iter()
         .filter_map(|t| terms.get(t.trim()).map(|g| (t.clone(), g.clone())))
         .collect();
+    let glossary_hits = found.len();
     let rest: Vec<String> = texts.iter().filter(|t| !found.contains_key(*t)).cloned().collect();
+    let t = Instant::now();
     if cfg.persist_cache && !rest.is_empty() {
         found.extend(crate::store::get_many(lang, &rest));
     }
+    let store_time = t.elapsed();
+    let store_hits = found.len() - glossary_hits;
     let mut missing: Vec<String> = Vec::new();
     for t in rest {
         if !found.contains_key(&t) && !missing.contains(&t) {
@@ -232,15 +244,42 @@ pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Re
         }
     }
     let engine = if missing.is_empty() {
+        tlog!(
+            "{who} 翻译 {} 条：术语表命中 {glossary_hits} · 译文库 {} 命中 {store_hits} · 无需请求引擎 · 共 {}",
+            texts.len(),
+            ms(store_time),
+            ms(start.elapsed())
+        );
         cache_engine()
     } else {
-        let (translated, kind) = translate_by_engines(cfg, &missing).await?;
+        let t = Instant::now();
+        let result = translate_by_engines(cfg, &missing).await;
+        let api_time = t.elapsed();
+        let (translated, kind) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                tlog!("{who} 翻译 {} 条：引擎全部失败，耗时 {}", missing.len(), ms(api_time));
+                return Err(e);
+            }
+        };
+        let n = missing.len();
         let pairs: Vec<(String, String)> = missing.into_iter().zip(translated).collect();
+        let t = Instant::now();
         if cfg.persist_cache {
             // 译文库里记引擎 id（与界面语言无关），显示时再换成当前语言的名称
             crate::store::put_many(lang, &pairs, &kind);
         }
+        let save_time = t.elapsed();
         found.extend(pairs);
+        tlog!(
+            "{who} 翻译 {} 条：术语表命中 {glossary_hits} · 译文库 {} 命中 {store_hits} · 引擎【{kind}】{} 条 {} · 写库 {} · 共 {}",
+            texts.len(),
+            ms(store_time),
+            n,
+            ms(api_time),
+            ms(save_time),
+            ms(start.elapsed())
+        );
         engine_name(&kind)
     };
     Ok((texts.iter().map(|t| found[t].clone()).collect(), engine))
@@ -251,10 +290,14 @@ async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<Str
     let mut errors = Vec::new();
     for (id, provider) in cfg.engine_chain() {
         let kind = provider.kind_or(&id);
+        let start = std::time::Instant::now();
         let result = match create(&kind, &provider) {
             Ok(t) => t.translate_batch(texts, &cfg.target_lang).await,
             Err(e) => Err(e),
         };
+        if !matches!(&result, Ok(t) if t.len() == texts.len()) {
+            tlog!("引擎【{kind}】失败，改用下一个，已耗时 {}", crate::timing::ms(start.elapsed()));
+        }
         match result {
             Ok(t) if t.len() == texts.len() => return Ok((t, kind)),
             Ok(_) => errors.push(t!("err.engine.count_mismatch", name = engine_name(&kind))),
