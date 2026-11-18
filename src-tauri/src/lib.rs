@@ -89,6 +89,7 @@ pub fn run() {
             i18n::ui_i18n,
             commands::select_done,
             commands::select_cancel,
+            commands::frame_ready,
             commands::engine_catalog,
             live::frame_set_paused,
             settings::settings_get,

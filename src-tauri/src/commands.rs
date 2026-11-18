@@ -5,6 +5,7 @@ use crate::config::PortableWebview;
 use crate::{live, translate};
 use serde::Deserialize;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder};
 
 const OVERLAY_LABEL: &str = "overlay";
@@ -13,7 +14,12 @@ const OVERLAY_LABEL: &str = "overlay";
 pub struct AppState {
     /// 当前框选遮罩所在显示器
     overlay_monitor: Mutex<Option<MonitorRect>>,
+    /// 已框选完成、正等新翻译框画出首帧后再关闭的遮罩
+    overlay_closing: Mutex<bool>,
 }
+
+/// 新翻译框迟迟未报告首帧时，最多让遮罩再留这么久
+const OVERLAY_LINGER_MAX: Duration = Duration::from_millis(1500);
 
 /// 选区，物理像素，相对遮罩所在显示器左上角
 #[derive(Debug, Deserialize)]
@@ -66,10 +72,37 @@ pub fn select_cancel(app: AppHandle) {
     close_overlay(&app);
 }
 
+/// 框选完成。遮罩（连同选区边框）先不关：新翻译框是透明窗口，WebView 画出首帧前什么都看不到，
+/// 若立即关遮罩，选区会先消失、片刻后翻译框才出现。等翻译框报告首帧（`frame_ready`）再关。
 #[tauri::command]
-pub async fn select_done(app: AppHandle, _state: State<'_, AppState>, rect: Rect) -> Result<(), String> {
-    let m = close_overlay(&app).ok_or_else(|| t!("err.select.expired"))?;
-    live::open_frame(&app, m.x + rect.x, m.y + rect.y, rect.w, rect.h)
+pub async fn select_done(app: AppHandle, state: State<'_, AppState>, rect: Rect) -> Result<(), String> {
+    let m = state.overlay_monitor.lock().unwrap().take().ok_or_else(|| t!("err.select.expired"))?;
+    *state.overlay_closing.lock().unwrap() = true;
+    if let Err(e) = live::open_frame(&app, m.x + rect.x, m.y + rect.y, rect.w, rect.h) {
+        finish_overlay(&app);
+        return Err(e);
+    }
+    // 兜底：翻译框页面加载异常时也不能让遮罩一直挡着屏幕
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(OVERLAY_LINGER_MAX).await;
+        finish_overlay(&app2);
+    });
+    Ok(())
+}
+
+/// 关闭框选完成后保留的遮罩（只关一次，不误关之后新开的遮罩）
+fn finish_overlay(app: &AppHandle) {
+    let closing = std::mem::take(&mut *app.state::<AppState>().overlay_closing.lock().unwrap());
+    if closing {
+        close_overlay(app);
+    }
+}
+
+/// 翻译框页面已画出首帧：此时关掉遮罩，选区边框与翻译框边框无缝衔接
+#[tauri::command]
+pub fn frame_ready(app: AppHandle) {
+    finish_overlay(&app);
 }
 
 /// 可选翻译引擎清单（供设置界面使用）

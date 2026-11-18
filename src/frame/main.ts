@@ -206,6 +206,9 @@ initI18n().then(() => {
   if (lastLayout) updateStatus(lastLayout);
 });
 
+// 首帧（边框）画出后通知后端关闭框选遮罩，避免松开鼠标时选区先消失、翻译框后出现
+requestAnimationFrame(() => requestAnimationFrame(() => invoke("frame_ready")));
+
 // 内容滚动：OCR 结果出来之前先整体平移现有译文
 listen<Shift>("shift", (e) => {
   if (e.payload.epoch !== epoch) return;
