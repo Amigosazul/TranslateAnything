@@ -14,6 +14,7 @@ mod settings;
 mod store;
 mod translate;
 mod tray;
+mod wgc;
 
 use std::sync::OnceLock;
 use tauri::RunEvent;
@@ -82,6 +83,13 @@ pub fn run() {
             // 带 --settings 启动时直接打开设置窗口
             if std::env::args().any(|a| a == "--settings") {
                 let _ = settings::open_settings(app.handle());
+            }
+            // 自测：带 --frame=x,y,w,h（物理像素）启动时直接在该处打开翻译框
+            if let Some(v) = std::env::args().find_map(|a| a.strip_prefix("--frame=").map(str::to_owned)) {
+                let v: Vec<i32> = v.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+                if v.len() == 4 {
+                    let _ = live::open_frame(app.handle(), v[0], v[1], v[2] as u32, v[3] as u32);
+                }
             }
             Ok(())
         })

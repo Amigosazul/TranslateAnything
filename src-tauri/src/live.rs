@@ -34,6 +34,8 @@ const IDLE_TICK: Duration = Duration::from_millis(100);
 const IDLE_AFTER: Duration = Duration::from_millis(800);
 /// 悬停检测间隔
 const HOVER_TICK: Duration = Duration::from_millis(40);
+/// 画面连续这么久没变才算滚动停下
+const STILL_AFTER: Duration = Duration::from_millis(30);
 /// 变化像素比例超过该值才重新识别
 const CHANGE_THRESHOLD: f32 = 0.002;
 /// 翻译失败后多久再重试
@@ -93,8 +95,10 @@ struct RenderBlock {
 struct ShiftPayload {
     epoch: u32,
     total: [i32; 2],
-    /// 这帧画面截于多少毫秒前（前端据此还原真实时刻，学习界面的滑动时长）
+    /// 这帧画面截于发出前多少毫秒（前端据此还原真实时刻，学习界面的滑动时长）
     age: u32,
+    /// 发出时刻（Unix 毫秒）：前端据此再扣除事件传到页面所花的时间
+    sent: f64,
 }
 
 /// 翻译框内的竖直滚轮输入：前端据此预测平移（一格 = ±120，向上为正）
@@ -102,6 +106,16 @@ struct ShiftPayload {
 struct WheelPayload {
     epoch: u32,
     delta: i32,
+    /// 发出时刻（Unix 毫秒）
+    sent: f64,
+}
+
+/// 当前时刻（Unix 毫秒），与页面里的 `Date.now()` 同一时钟
+fn unix_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
 }
 
 /// 新建翻译框（物理像素，虚拟桌面坐标）
@@ -194,6 +208,15 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
     let mut ocr_stale = true;
     let mut last_change = Instant::now();
     let mut wheel_rx = input::subscribe();
+    // 上一次推送的是"在动"的位移：画面一停就再补发一次不变的位移，前端据此立刻停止外推
+    let mut moving = false;
+    let mut last_move = Instant::now();
+    // 截取器（WGC 会话跨帧保持）；WGC 有新帧时立即唤醒循环
+    let frame_arrived = Arc::new(tokio::sync::Notify::new());
+    let capturer = Arc::new(Mutex::new(capture::Capturer::new({
+        let n = frame_arrived.clone();
+        Arc::new(move || n.notify_one())
+    })));
 
     loop {
         let tick = if last_change.elapsed() < IDLE_AFTER { FAST_TICK } else { IDLE_TICK };
@@ -201,6 +224,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
         tokio::select! {
             _ = tokio::time::sleep(tick) => {}
             _ = ctl.wake.notified() => last_change = Instant::now(),
+            _ = frame_arrived.notified() => {}
             w = wheel_rx.recv() => {
                 if let Ok(w) = w {
                     let mut delta = 0;
@@ -219,7 +243,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
                     if hit {
                         last_change = Instant::now();
                         if delta != 0 && !ctl.paused.load(Ordering::Relaxed) {
-                            let _ = app.emit_to(&label, "wheel", WheelPayload { epoch, delta });
+                            let _ = app.emit_to(&label, "wheel", WheelPayload { epoch, delta, sent: unix_ms() });
                         }
                     } else {
                         // 不是本框的滚轮：照常等到下一帧
@@ -237,15 +261,15 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
         let rect_changed = last_rect != Some(rect);
 
         // 截屏 + 灰度化（阻塞操作放到线程池）
-        let shot_at = Instant::now();
+        let cap = capturer.clone();
         let shot = tauri::async_runtime::spawn_blocking(move || {
-            capture::capture_under(rect.0, rect.1, rect.2, rect.3).map(|(img, ox, oy)| {
-                let frame = Frame::from_rgba(&img);
-                (img, frame, ox, oy)
+            cap.lock().unwrap().grab(rect.0, rect.1, rect.2, rect.3).map(|s| {
+                let frame = Frame::from_rgba(&s.image);
+                (s.image, frame, s.ox, s.oy, s.at)
             })
         })
         .await;
-        let (image, frame, ox, oy) = match shot {
+        let (image, frame, ox, oy, shot_at) = match shot {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 ocr_error = Some(e);
@@ -266,20 +290,29 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             prev = Some(frame);
             last_rect = Some(rect);
             layout_changed = true;
+            moving = false;
         } else if prev
             .as_ref()
             .is_none_or(|p| motion::changed_fraction(p, &frame) > CHANGE_THRESHOLD)
         {
             // 内容滚动：立即推送新的累计位移，前端马上平移现有译文
+            moving = false;
             if let Some((dx, dy)) = prev.as_ref().and_then(|p| motion::estimate_shift(p, &frame)) {
                 total[0] += dx;
                 total[1] += dy;
                 let age = shot_at.elapsed().as_millis() as u32;
-                let _ = app.emit_to(&label, "shift", ShiftPayload { epoch, total, age });
+                let _ = app.emit_to(&label, "shift", ShiftPayload { epoch, total, age, sent: unix_ms() });
+                moving = dx != 0 || dy != 0;
+                last_move = shot_at;
             }
             ocr_stale = true;
             last_change = Instant::now();
             prev = Some(frame);
+        } else if moving && shot_at.saturating_duration_since(last_move) >= STILL_AFTER {
+            // 画面停了：补发一次不变的位移（截屏比界面刷新快时相邻两帧可能相同，所以要静止一小段才算）
+            moving = false;
+            let age = shot_at.elapsed().as_millis() as u32;
+            let _ = app.emit_to(&label, "shift", ShiftPayload { epoch, total, age, sent: unix_ms() });
         }
 
         let mut s = shared.lock().unwrap();
@@ -394,7 +427,8 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
 mod tests {
     use super::*;
 
-    /// 真机计时（只读屏幕，不操作窗口）：连续"截屏 + 灰度化 + 变化检测 + 位移估计"的帧率。
+    /// 真机计时（只读屏幕，不操作窗口）：连续"截屏 + 灰度化 + 变化检测 + 位移估计"的帧率，
+    /// 以及画面的平均延迟（截取完成时距画面对应时刻）。TA_CAPTURE=wgc / printwindow 可强制截屏方式。
     /// TF_RECT=x,y,w,h cargo test 跟踪帧率 -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -404,15 +438,20 @@ mod tests {
             .split(',')
             .filter_map(|p| p.trim().parse().ok())
             .collect();
+        capture::tests::dpi_aware();
+        let mut capturer = capture::Capturer::new(Arc::new(|| {}));
         let mut prev: Option<Frame> = None;
-        let n = 40;
+        let n = 60;
         let t = Instant::now();
-        let mut cap = Duration::ZERO;
+        let (mut cap, mut age) = (Duration::ZERO, Duration::ZERO);
+        let mut wgc = 0;
         for _ in 0..n {
             let t1 = Instant::now();
-            let (img, _, _) = capture::capture_under(v[0], v[1], v[2] as u32, v[3] as u32).unwrap();
+            let s = capturer.grab(v[0], v[1], v[2] as u32, v[3] as u32).unwrap();
             cap += t1.elapsed();
-            let f = Frame::from_rgba(&img);
+            age += s.at.elapsed();
+            wgc += s.wgc as u32;
+            let f = Frame::from_rgba(&s.image);
             if let Some(p) = &prev {
                 let _ = motion::changed_fraction(p, &f);
                 let _ = motion::estimate_shift(p, &f);
@@ -420,7 +459,13 @@ mod tests {
             prev = Some(f);
         }
         let el = t.elapsed();
-        println!("每帧 {:?}（其中截屏 {:?}），约 {:.0} 帧/秒", el / n, cap / n, n as f64 / el.as_secs_f64());
+        println!(
+            "每帧 {:?}（其中截屏 {:?}，画面平均已过去 {:?}），约 {:.0} 帧/秒；WGC {wgc}/{n} 帧",
+            el / n,
+            cap / n,
+            age / n,
+            n as f64 / el.as_secs_f64()
+        );
     }
 
     /// 真机端到端：截取主屏左上角 → OCR → 分段 → 批量翻译。cargo test 端到端 -- --ignored --nocapture

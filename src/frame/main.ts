@@ -42,8 +42,10 @@ interface Layout {
 interface Shift {
   epoch: number;
   total: [number, number];
-  /** 这帧画面截于多少毫秒前 */
+  /** 这帧画面截于发出前多少毫秒 */
   age: number;
+  /** 发出时刻（Unix 毫秒） */
+  sent: number;
 }
 
 /** 一个块最终采用的排版参数（CSS 像素） */
@@ -133,13 +135,15 @@ function fitText(el: HTMLElement, b: Block) {
   fitCache.set(key, { ...f });
 }
 
-/** 按显示用的滚动量平移整个译文层 */
+/** 按显示用的滚动量平移整个译文层；跟随不确定时变淡 */
 function applyOffset() {
   const [x, y] = follower.display;
   blocksEl.style.transform = `translate3d(${px(x - base[0])}, ${px(y - base[1])}, 0)`;
+  blocksEl.style.opacity = follower.opacity < 1 ? follower.opacity.toFixed(2) : "";
 }
 
 function frameTick(now: number) {
+  follower.scale = window.devicePixelRatio;
   follower.tick(now);
   applyOffset();
   rafId = follower.active ? requestAnimationFrame(frameTick) : 0;
@@ -166,7 +170,7 @@ function updateStatus(layout: Layout) {
 function render(layout: Layout) {
   if (layout.epoch < minEpoch) return;
   if (layout.epoch !== epoch) follower.reset(layout.total);
-  else follower.onMeasured(layout.total, performance.now());
+  else follower.sync(layout.total, performance.now());
   epoch = layout.epoch;
   base = layout.base;
   applyOffset();
@@ -230,17 +234,22 @@ win.onScaleChanged((e) => fitBorder(e.payload.size.width, e.payload.size.height)
 // 首帧（边框）画出后通知后端关闭框选遮罩，避免松开鼠标时选区先消失、翻译框后出现
 requestAnimationFrame(() => requestAnimationFrame(() => invoke("frame_ready")));
 
+/** 事件从后端发出到页面收到花了多久（毫秒）：两边用同一个系统时钟 */
+function transit(sent: number) {
+  return Math.min(500, Math.max(0, Date.now() - sent));
+}
+
 // 内容滚动：OCR 结果出来之前先整体平移现有译文
 listen<Shift>("shift", (e) => {
   if (e.payload.epoch !== epoch) return;
-  follower.onMeasured(e.payload.total, performance.now(), e.payload.age);
+  follower.onMeasured(e.payload.total, performance.now(), e.payload.age + transit(e.payload.sent));
   kick();
 });
 
 // 框内滚轮：先按学到的滚动量预测平移，不等截屏比对
-listen<{ epoch: number; delta: number }>("wheel", (e) => {
+listen<{ epoch: number; delta: number; sent: number }>("wheel", (e) => {
   if (e.payload.epoch !== epoch) return;
-  follower.onWheel(e.payload.delta, performance.now());
+  follower.onWheel(e.payload.delta, performance.now() - transit(e.payload.sent));
   kick();
 });
 

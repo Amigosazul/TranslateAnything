@@ -5,8 +5,12 @@
 //!   把自己画出来，再拼成该区域的画面。这样截到的永远是原始内容，不会把翻译框自己的译文截进去，
 //!   也无需隐藏窗口（不闪烁）。
 //!   （曾用 `WDA_EXCLUDEFROMCAPTURE` 排除翻译框，但它会让透明的 WebView2 窗口在屏幕上也不可见，已弃用。）
+//! - 能关掉截取边框的系统（Windows 11）上，框下只有一个窗口时改用 WGC 按窗口截取，延迟更低（`wgc.rs`）。
 
 use image::RgbaImage;
+use std::sync::Arc;
+use std::time::Instant;
+use windows::Win32::Foundation::{HWND, RECT};
 use xcap::Monitor;
 
 /// 显示器的位置与尺寸
@@ -28,15 +32,73 @@ pub fn monitor_at(x: i32, y: i32) -> Result<MonitorRect, String> {
     })
 }
 
-/// 截取某区域内"本程序窗口之下"的画面：按 Z 序找出与区域相交的其他程序窗口，
-/// 从下往上逐个 `PrintWindow` 后拼到画布上。
+/// 一次截取的结果
+pub struct Shot {
+    pub image: RgbaImage,
+    /// 图像左上角相对请求区域的偏移
+    pub ox: i32,
+    pub oy: i32,
+    /// 画面对应的时刻（PrintWindow 为开始绘制时，WGC 为 DWM 合成该帧时）
+    pub at: Instant,
+    /// 是否来自 WGC
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub wgc: bool,
+}
+
+/// 翻译框的持续截取器：框下只有一个窗口且区域落在它的可见范围内时用 WGC（见 `wgc.rs`），
+/// 否则用 `PrintWindow` 逐层拼接。
+pub struct Capturer {
+    on_frame: Arc<dyn Fn() + Send + Sync>,
+    wgc: Option<crate::wgc::WindowCapture>,
+    /// 建立 WGC 会话失败过的窗口，不再重试
+    failed: Option<isize>,
+}
+
+impl Capturer {
+    /// `on_frame`：WGC 有新帧时调用，用来立即唤醒跟踪循环
+    pub fn new(on_frame: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self { on_frame, wgc: None, failed: None }
+    }
+
+    pub fn grab(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<Shot, String> {
+        let layers = layers_under(x, y, w, h)?;
+        if layers.len() == 1 && crate::wgc::available() {
+            let hwnd = layers[0].0.0 as isize;
+            if self.wgc.as_ref().is_some_and(|c| c.hwnd != hwnd) {
+                self.wgc = None;
+            }
+            if self.wgc.is_none() && self.failed != Some(hwnd) {
+                match crate::wgc::WindowCapture::new(hwnd, self.on_frame.clone()) {
+                    Ok(c) => self.wgc = Some(c),
+                    Err(_) => self.failed = Some(hwnd),
+                }
+            }
+            if let Some(c) = &mut self.wgc {
+                // 还没有帧、区域超出窗口可见边界等：这一次先用 PrintWindow
+                if let Ok(Some((image, at))) = c.grab(x, y, w, h) {
+                    return Ok(Shot { image, ox: 0, oy: 0, at, wgc: true });
+                }
+            }
+        }
+        // 框下暂时多出别的窗口（菜单、弹窗）时保留 WGC 会话，回来后接着用
+        let at = Instant::now();
+        let image = print_layers(&layers, x, y, w, h)?;
+        Ok(Shot { image, ox: 0, oy: 0, at, wgc: false })
+    }
+}
+
+/// 截取某区域内"本程序窗口之下"的画面（只用 `PrintWindow`）。
 ///
 /// 返回的图像与请求区域等大，坐标偏移恒为 (0, 0)（保留偏移字段，便于以后换成会裁剪的截屏方式）。
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, i32), String> {
-    use windows::Win32::Foundation::{HWND, RECT};
+    let layers = layers_under(x, y, w, h)?;
+    Ok((print_layers(&layers, x, y, w, h)?, 0, 0))
+}
+
+/// 按 Z 序自顶向下收集与区域相交的其他程序窗口，直到遇到一个完全盖住区域的窗口
+fn layers_under(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<(HWND, RECT)>, String> {
     use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
-    use windows::Win32::Graphics::Gdi::*;
-    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     if w == 0 || h == 0 {
@@ -45,7 +107,6 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
     let (rw, rh) = (w as i32, h as i32);
     let own_pid = std::process::id();
 
-    // 1. 自顶向下收集与区域相交的窗口，直到遇到一个完全盖住区域的窗口
     let mut layers: Vec<(HWND, RECT)> = Vec::new();
     unsafe {
         let mut cur = GetTopWindow(None).ok();
@@ -90,8 +151,16 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
     if layers.is_empty() {
         return Err(t!("err.capture.no_window"));
     }
+    Ok(layers)
+}
 
-    // 2. 从下往上画到画布
+/// 把各层窗口从下往上 `PrintWindow` 到画布，读出区域画面
+fn print_layers(layers: &[(HWND, RECT)], x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, String> {
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT;
+
+    let (rw, rh) = (w as i32, h as i32);
     unsafe {
         let screen = GetDC(None);
         let canvas_dc = CreateCompatibleDC(Some(screen));
@@ -111,7 +180,7 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
             let _ = DeleteDC(win_dc);
         }
 
-        // 3. 读出像素（BGRA，自上而下）
+        // 读出像素（BGRA，自上而下）
         let mut info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -137,8 +206,7 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
             px.swap(0, 2);
             px[3] = 255;
         }
-        let image = RgbaImage::from_raw(w, h, buf).ok_or_else(|| t!("err.capture.bad_size"))?;
-        Ok((image, 0, 0))
+        RgbaImage::from_raw(w, h, buf).ok_or_else(|| t!("err.capture.bad_size"))
     }
 }
 
@@ -210,8 +278,17 @@ pub fn capture_window(hwnd_raw: isize) -> Result<RgbaImage, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
+
+    /// 测试进程默认不感知 DPI，窗口坐标会被系统按缩放比换算，与 DWM 的物理像素对不上；
+    /// 正式程序由清单声明了按显示器感知 DPI，这里与之保持一致
+    pub fn dpi_aware() {
+        use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+    }
 
     /// 真机实测：截取屏幕中央区域下层窗口画面并存成 PNG。
     /// TF_SHOT=输出路径 cargo test 下层窗口截取 -- --ignored --nocapture
@@ -226,9 +303,12 @@ mod tests {
                 (v.len() == 4).then(|| (v[0], v[1], v[2] as u32, v[3] as u32))
             })
             .unwrap_or((400, 300, 600, 400));
+        // TA_CAPTURE=wgc / printwindow 可强制截屏方式，便于对比两者画面是否一致
+        dpi_aware();
+        let mut capturer = Capturer::new(Arc::new(|| {}));
         let t = std::time::Instant::now();
-        let (img, _, _) = capture_under(x, y, w, h).unwrap();
-        println!("耗时 {:?}", t.elapsed());
-        img.save(&out).unwrap();
+        let shot = capturer.grab(x, y, w, h).unwrap();
+        println!("耗时 {:?}，WGC：{}", t.elapsed(), shot.wgc);
+        shot.image.save(&out).unwrap();
     }
 }
