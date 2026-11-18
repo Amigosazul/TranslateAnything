@@ -21,8 +21,9 @@ impl Frame {
     pub fn from_rgba(img: &RgbaImage) -> Self {
         let (w, h) = (img.width() as usize, img.height() as usize);
         let gray = img
-            .pixels()
-            .map(|p| ((p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114) / 1000) as u8)
+            .as_raw()
+            .chunks_exact(4)
+            .map(|p| ((p[0] as u32 * 77 + p[1] as u32 * 150 + p[2] as u32 * 29) >> 8) as u8)
             .collect();
         Self { w, h, gray }
     }
@@ -104,7 +105,13 @@ fn sig_diff(a: &Sig, b: &Sig) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / BUCKETS as f32
 }
 
-/// 在 [-n/2, n/2] 内找使 cur[i] ≈ prev[i + s] 的 s，返回内容位移 -s
+/// 粗搜时最多使用的有效行数（均匀抽样），精搜时再用全部有效行核对
+const COARSE_ROWS: usize = 96;
+/// 粗搜保留的候选偏移个数
+const COARSE_CANDIDATES: usize = 4;
+
+/// 在 [-n/2, n/2] 内找使 cur[i] ≈ prev[i + s] 的 s，返回内容位移 -s。
+/// 先用抽样行粗搜所有偏移，再在最优偏移附近用全部有效行精确核对，耗时与画面高度近似线性。
 fn best_offset(prev: &[Sig], cur: &[Sig]) -> Option<i32> {
     let n = cur.len() as i32;
     let max = n / 2;
@@ -113,10 +120,12 @@ fn best_offset(prev: &[Sig], cur: &[Sig]) -> Option<i32> {
     if informative.len() < 4 {
         return None;
     }
-    let err_at = |s: i32| -> Option<f32> {
+    let step = informative.len().div_ceil(COARSE_ROWS);
+    let sampled: Vec<usize> = informative.iter().step_by(step).copied().collect();
+    let err_at = |rows: &[usize], s: i32| -> Option<f32> {
         let mut sum = 0.0;
         let mut cnt = 0;
-        for &i in &informative {
+        for &i in rows {
             let j = i as i32 + s;
             if j >= 0 && j < n {
                 sum += sig_diff(&cur[i], &prev[j as usize]);
@@ -124,18 +133,30 @@ fn best_offset(prev: &[Sig], cur: &[Sig]) -> Option<i32> {
             }
         }
         // 重叠的有效行太少不可信
-        (cnt * 2 >= informative.len()).then(|| sum / cnt as f32)
+        (cnt * 2 >= rows.len()).then(|| sum / cnt as f32)
     };
-    let err0 = err_at(0)?;
+
+    // 粗搜：保留误差最小的几个候选（抽样可能被重复图案骗到，不能只信第一名）
+    let mut candidates: Vec<(f32, i32)> = (-max..=max)
+        .filter(|&s| s != 0)
+        .filter_map(|s| err_at(&sampled, s).map(|e| (e, s)))
+        .collect();
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+    candidates.truncate(COARSE_CANDIDATES);
+
+    // 精搜：在每个候选 ±2 内用全部有效行核对
+    let err0 = err_at(&informative, 0)?;
     let (mut best_s, mut best_err) = (0, err0);
-    for s in -max..=max {
-        if s == 0 {
-            continue;
-        }
-        if let Some(e) = err_at(s) {
-            if e < best_err {
-                best_err = e;
-                best_s = s;
+    for &(_, c) in &candidates {
+        for s in (c - 2)..=(c + 2) {
+            if s == 0 || s.abs() > max {
+                continue;
+            }
+            if let Some(e) = err_at(&informative, s) {
+                if e < best_err {
+                    best_err = e;
+                    best_s = s;
+                }
             }
         }
     }
@@ -187,5 +208,43 @@ mod tests {
         let b = Frame::from_rgba(&page(0));
         assert_eq!(changed_fraction(&a, &b), 0.0);
         assert_eq!(estimate_shift(&a, &b), None);
+    }
+
+    #[test]
+    fn 位移估计耗时() {
+        // 模拟 900x1400 的大框
+        let mk = |offset: i32| {
+            let mut img = RgbaImage::from_pixel(900, 1400, Rgba([255, 255, 255, 255]));
+            for line in 0..90 {
+                let top = line * 16 + offset;
+                for y in top..top + 9 {
+                    if !(0..1400).contains(&y) {
+                        continue;
+                    }
+                    for x in 0..900 {
+                        // 每行不同的伪随机"字形"
+                        let h = (x / 3u32).wrapping_mul(2654435761u32).wrapping_add((y - top) as u32 * 7919 + line as u32 * 40503) >> 13;
+                        if h % 3 == 0 {
+                            img.put_pixel(x, y as u32, Rgba([0, 0, 0, 255]));
+                        }
+                    }
+                }
+            }
+            img
+        };
+        let (a, b) = (mk(0), mk(-23));
+        let t = std::time::Instant::now();
+        let (fa, fb) = (Frame::from_rgba(&a), Frame::from_rgba(&b));
+        println!("灰度化 {:?}", t.elapsed());
+        let t2 = std::time::Instant::now();
+        let _ = row_signatures(&fa);
+        println!("行签名 {:?}", t2.elapsed());
+        let t2 = std::time::Instant::now();
+        let _ = changed_fraction(&fa, &fb);
+        println!("变化比例 {:?}", t2.elapsed());
+        let d = estimate_shift(&fa, &fb);
+        let el = t.elapsed();
+        println!("灰度化 + 位移估计耗时 {el:?}");
+        assert_eq!(d, Some((0, -23)));
     }
 }

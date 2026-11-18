@@ -2,6 +2,7 @@ mod capture;
 mod commands;
 mod config;
 mod immersive;
+mod input;
 mod layout;
 mod live;
 mod motion;
@@ -45,6 +46,8 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // 只读监听滚轮，让译文起步更跟手
+            input::start();
             let cfg = config::load().unwrap_or_else(|e| {
                 eprintln!("{e}\n使用默认配置");
                 config::Config::default()
