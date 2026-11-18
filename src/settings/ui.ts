@@ -54,6 +54,7 @@ const ICONS = {
   down: '<path d="m6 9 6 6 6-6"/>',
   chevL: '<path d="m15 6-6 6 6 6"/>',
   chevR: '<path d="m9 6 6 6-6 6"/>',
+grip: '<g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
 } as const;
 

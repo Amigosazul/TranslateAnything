@@ -203,14 +203,26 @@ export function llmReady(c: Config): boolean {
   return !!p && !!p.base_url?.trim() && !!p.model?.trim();
 }
 
-/** 测试某个引擎（用已保存的配置），结果记到 S.tests 并刷新界面 */
-export async function testEngine(id: string) {
+/** 按给定顺序写回传统引擎链：翻译引擎方式下首个做主用，大模型方式下整条作为回退 */
+export function setEngineChain(c: Config, ids: string[]) {
+  if (methodOf(c) === "llm") c.fallback = ids;
+  else {
+    c.engine = ids[0];
+    c.fallback = ids.slice(1);
+  }
+}
+
+/** 测试某个引擎（用已保存的配置），结果记到 S.tests 并刷新界面；返回是否通过 */
+export async function testEngine(id: string): Promise<boolean> {
   S.tests[id] = { busy: true };
   refresh();
+  let ok = false;
   try {
     S.tests[id] = { busy: false, result: await invoke<EngineTest>("engine_test", { id }) };
+    ok = true;
   } catch (e) {
     S.tests[id] = { busy: false, error: errText(e) };
   }
   refresh();
+  return ok;
 }

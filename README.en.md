@@ -70,7 +70,7 @@ Works out of the box — **no account or API key needed**. The free Microsoft Tr
 | DeepLX | Optional | Self-hosted |
 | **LLM** | ✓ | Any OpenAI-compatible service, for more natural translations |
 
-On the **Engines** page you can switch between **translation engines / LLM** with one click, arrange the fallback order, and test the speed of each engine.
+On the **Engines** page you can switch between **translation engines / LLM** with one click, enable or disable engines with a switch and drag them into order — they are called from top to bottom, moving on to the next if one fails. Each engine is tested before it can be enabled, and you can test the speed of any engine at any time.
 
 <p align="center">
   <img src="docs/images/settings-engines.png" width="820" alt="Engine settings">

@@ -852,22 +852,87 @@ button.link-btn:hover svg {
   color: var(--accent-text);
 }
 
-/* ───── 翻译引擎 ───── */
+/* ───── 翻译引擎 ─────
+   一张列表：左侧拖动手柄排序，右侧开关启用 / 停用；启用的从上到下就是调用顺序 */
+.list-hint {
+  margin: -4px 2px 10px;
+}
+
+.engine-list {
+  position: relative;
+}
+
 .engine-row {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0 12px;
-  padding: 0 20px 0 0;
-  transition: background 0.15s;
+  padding: 0 20px 0 6px;
+  background: var(--panel);
+  transition: background 0.15s, opacity 0.15s;
 }
 
 .engine-row + .engine-row {
   border-top: 1px solid var(--line);
 }
 
-.engine-row.selected {
-  background: linear-gradient(90deg, var(--accent-soft), transparent 70%);
+.engine-row:not(.on) .engine-pick {
+  opacity: 0.62;
+}
+
+.engine-row:hover {
+  background: var(--hover);
+}
+
+.engine-list.sorting .engine-row {
+  transition: transform 0.18s var(--ease-out);
+}
+
+.engine-list.sorting .engine-row.dragging {
+  z-index: 2;
+  transition: none;
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow), 0 0 0 1.5px var(--accent);
+}
+
+.engine-list.sorting,
+.engine-list.sorting * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.engine-grip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+  transition: color 0.15s, background 0.15s;
+}
+
+.engine-grip svg {
+  width: 16px;
+  height: 16px;
+}
+
+.engine-grip:hover:not(:disabled),
+.engine-grip:focus-visible {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.engine-grip:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 
 .engine-pick {
@@ -875,8 +940,8 @@ button.link-btn:hover svg {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 0 12px 20px;
+  gap: 12px;
+  padding: 12px 0;
   border: 0;
   background: none;
   font: inherit;
@@ -885,69 +950,12 @@ button.link-btn:hover svg {
   cursor: pointer;
 }
 
-.engine-row:not(.selected) .engine-pick:hover {
-  background: none;
+.engine-pick.static {
+  cursor: default;
 }
 
-.engine-row:not(.selected):hover {
-  background: var(--hover);
-}
-
-.radio {
+.engine-num {
   flex: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 1.5px solid var(--line-strong);
-  background: var(--input);
-  transition: border-color 0.15s, border-width 0.2s var(--ease-spring);
-}
-
-.engine-row.selected .radio {
-  border: 5px solid var(--accent);
-}
-
-.engine-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-weight: 500;
-}
-
-.engine-params {
-  flex-basis: 100%;
-  padding: 0 0 16px 50px;
-}
-
-.form-grid.two {
-  grid-template-columns: 1fr 1fr;
-}
-
-.card.ring {
-  box-shadow: var(--shadow), 0 0 0 1.5px var(--accent);
-  border-color: transparent;
-}
-
-.fb-list {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.fb-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 6px 5px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  animation: pop 0.22s var(--ease-out);
-}
-
-.fb-num {
   display: grid;
   place-items: center;
   width: 20px;
@@ -960,9 +968,52 @@ button.link-btn:hover svg {
   font-variant-numeric: tabular-nums;
 }
 
-button.icon-btn.plain:hover {
-  background: var(--hover);
-  color: var(--text);
+.engine-row:not(.on) .engine-num {
+  background: none;
+  border: 1.5px dashed var(--line-strong);
+}
+
+.engine-chev {
+  flex: none;
+  display: grid;
+  color: var(--muted);
+  transition: transform 0.2s var(--ease-out);
+}
+
+.engine-chev svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.engine-row.open .engine-chev {
+  transform: rotate(180deg);
+}
+
+.engine-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-weight: 500;
+}
+
+.engine-params {
+  flex-basis: 100%;
+  padding: 0 0 16px 60px;
+}
+
+.form-grid.two {
+  grid-template-columns: 1fr 1fr;
+}
+
+.card.ring {
+  box-shadow: var(--shadow), 0 0 0 1.5px var(--accent);
+  border-color: transparent;
 }
 
 button.icon-btn:disabled {
