@@ -29,6 +29,10 @@ pub struct Config {
     pub fallback: Vec<String>,
     /// 各引擎参数，键为引擎 id；未出现的引擎按默认参数使用
     pub engines: BTreeMap<String, ProviderConfig>,
+    /// 全局代理，所有引擎默认都走它：留空 = 直连；`system` = 跟随系统环境变量；其他 = 代理地址。
+    /// 单个引擎可在自己的 `proxy` 里另行指定（见 `ProviderConfig::proxy`）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub proxy: String,
     /// 译文写入本地库（`~/.translate-anything/translations.db`），相同原文下次直接查库不再请求引擎
     pub persist_cache: bool,
     /// 译文库所在文件夹；留空 = 数据目录。请在设置窗口里修改（会连同文件一起搬过去）
@@ -60,7 +64,9 @@ pub struct ProviderConfig {
     pub region: String,
     /// 仅 openai 使用
     pub model: String,
-    /// 代理：留空/不填 = 直连；`system` = 跟随系统环境变量；其他 = 代理地址
+    /// 本引擎的代理：留空 / 不填 = 跟随全局 `Config::proxy`；`direct` = 直连；
+    /// `system` = 跟随系统环境变量；其他 = 代理地址。
+    /// 旧版里留空表示直连，而全局代理默认也是直连，所以旧配置行为不变、无需迁移
     pub proxy: Option<String>,
 }
 
@@ -137,6 +143,7 @@ impl Default for Config {
             engine: "edge".into(),
             fallback: Vec::new(),
             engines: BTreeMap::new(),
+            proxy: String::new(),
             persist_cache: true,
             store_dir: String::new(),
             builtin_glossary: true,
@@ -148,13 +155,25 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 按尝试顺序返回（引擎 id，参数），已去重
+    /// 某个引擎实际使用的参数：`proxy` 已按"引擎自己的 → 全局"解析好，
+    /// 结果为空或 `direct` 表示直连
+    pub fn provider(&self, id: &str) -> ProviderConfig {
+        self.resolve_proxy(self.engines.get(id).cloned().unwrap_or_default())
+    }
+
+    fn resolve_proxy(&self, mut p: ProviderConfig) -> ProviderConfig {
+        let own = p.proxy.as_deref().map(str::trim).unwrap_or("");
+        p.proxy = Some(if own.is_empty() { self.proxy.trim() } else { own }.to_string());
+        p
+    }
+
+    /// 按尝试顺序返回（引擎 id，参数），已去重；参数里的代理已解析好
     pub fn engine_chain(&self) -> Vec<(String, ProviderConfig)> {
         // 兼容旧版：只写了 provider
         if self.engines.is_empty() {
             if let Some(p) = &self.provider {
                 let id = p.kind_or("openai");
-                return vec![(id, p.clone())];
+                return vec![(id, self.resolve_proxy(p.clone()))];
             }
         }
         let mut ids: Vec<&str> = vec![self.engine.trim()];
@@ -166,10 +185,10 @@ impl Config {
                 continue;
             }
             seen.push(id);
-            chain.push((id.to_string(), self.engines.get(id).cloned().unwrap_or_default()));
+            chain.push((id.to_string(), self.provider(id)));
         }
         if chain.is_empty() {
-            chain.push(("edge".into(), ProviderConfig::default()));
+            chain.push(("edge".into(), self.provider("edge")));
         }
         chain
     }
@@ -344,6 +363,23 @@ mod tests {
         let cfg: Config = serde_json::from_str(r#"{"immersive":{"targets":[{"name":"a","port":40000}]}}"#).unwrap();
         assert!(cfg.immersive.targets[0].enabled, "缺省为启用");
         assert!(cfg.immersive.enabled);
+    }
+
+    #[test]
+    fn 代理跟随全局与单独指定() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"proxy":"http://127.0.0.1:7897",
+                "engines":{"edge":{"proxy":"direct"},"google_free":{"proxy":"http://127.0.0.1:1080"},"bing":{"proxy":""}}}"#,
+        )
+        .unwrap();
+        let proxy = |id: &str| cfg.provider(id).proxy.unwrap();
+        assert_eq!(proxy("edge"), "direct");
+        assert_eq!(proxy("google_free"), "http://127.0.0.1:1080");
+        assert_eq!(proxy("bing"), "http://127.0.0.1:7897", "留空跟随全局");
+        assert_eq!(proxy("deepl"), "http://127.0.0.1:7897", "没配置过的引擎也跟随全局");
+        // 旧配置没有全局代理：留空仍是直连
+        let old: Config = serde_json::from_str(r#"{"engines":{"bing":{"proxy":null}}}"#).unwrap();
+        assert_eq!(old.provider("bing").proxy.unwrap(), "");
     }
 
     #[test]

@@ -254,6 +254,11 @@ async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<Str
     Err(errors.join("\n"))
 }
 
+/// 大模型接口可用的模型 id（已排序去重）
+pub async fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, String> {
+    openai::list_models(cfg).await.map_err(|e| e.to_string())
+}
+
 /// 引擎测试结果（设置窗口"测试"按钮）
 #[derive(Debug, Serialize)]
 pub struct EngineTest {
@@ -268,7 +273,7 @@ pub struct EngineTest {
 /// 用一句固定的英文测试某个已配置的引擎（不查缓存、不写译文库、不回退）
 pub async fn test_engine(cfg: &Config, id: &str) -> Result<EngineTest, String> {
     const SAMPLE: &str = "Hello! Screen text, translated anywhere.";
-    let provider = cfg.engines.get(id).cloned().unwrap_or_default();
+    let provider = cfg.provider(id);
     let kind = provider.kind_or(id);
     let name = engine_name(&kind);
     let start = std::time::Instant::now();
@@ -287,7 +292,8 @@ const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 /// 按配置构造 HTTP 客户端
 ///
-/// 代理：留空 = 直连（本机环境变量里的代理曾导致 HTTPS 握手失败）；
+/// `cfg.proxy` 应是已按全局解析过的值（见 `Config::provider`）：留空或 `direct` = 直连
+/// （本机环境变量里的代理曾导致 HTTPS 握手失败，所以不默认跟随环境变量）；
 /// `system` = 跟随系统环境变量；其他 = 代理地址
 fn build_client(cfg: &ProviderConfig) -> Result<reqwest::Client, TranslateError> {
     let mut builder = reqwest::Client::builder()
@@ -295,6 +301,7 @@ fn build_client(cfg: &ProviderConfig) -> Result<reqwest::Client, TranslateError>
         .timeout(Duration::from_secs(60));
     builder = match cfg.proxy.as_deref().map(str::trim) {
         Some("system") => builder,
+        Some("direct") => builder.no_proxy(),
         Some(p) if !p.is_empty() => builder.proxy(
             reqwest::Proxy::all(p).map_err(|e| TranslateError::Config(t!("err.engine.bad_proxy", e = e)))?,
         ),
@@ -466,6 +473,20 @@ mod tests {
                 assert_ne!(m, unsupported, "{}", e.id);
             }
         }
+    }
+
+    /// 联网实测：OpenRouter 的模型列表不需要密钥
+    #[tokio::test]
+    #[ignore]
+    async fn 联网实测模型列表() {
+        let cfg = ProviderConfig {
+            base_url: "https://openrouter.ai/api/v1".into(),
+            proxy: Some("http://127.0.0.1:7897".into()),
+            ..Default::default()
+        };
+        let ids = list_models(&cfg).await.unwrap();
+        println!("{} 个模型，如 {:?}", ids.len(), &ids[..3.min(ids.len())]);
+        assert!(!ids.is_empty());
     }
 
     /// 联网实测：cargo test -- --ignored --nocapture

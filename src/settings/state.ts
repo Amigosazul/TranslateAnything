@@ -32,6 +32,8 @@ export interface Config {
   engine: string;
   fallback: string[];
   engines: Record<string, ProviderConfig>;
+  /** 全局代理：空 = 直连；system = 系统代理；其他 = 代理地址 */
+  proxy?: string;
   persist_cache: boolean;
   builtin_glossary: boolean;
   glossary: Record<string, string>;
@@ -126,8 +128,19 @@ export async function loadStats() {
   }
 }
 
+let lastSave: Promise<unknown> = Promise.resolve();
+
+/** 等正在进行的保存完成（后端按已保存的配置干活前调用，如获取模型列表） */
+export const settled = () => lastSave;
+
 /** 修改配置并保存；成功后重新读取并刷新界面 */
-export async function saveConfig(mutate: (c: Config) => void, okMsg: string = t("common.saved")): Promise<boolean> {
+export function saveConfig(mutate: (c: Config) => void, okMsg: string = t("common.saved")): Promise<boolean> {
+  const p = doSave(mutate, okMsg);
+  lastSave = p;
+  return p;
+}
+
+async function doSave(mutate: (c: Config) => void, okMsg: string): Promise<boolean> {
   const next = clone(S.view.config);
   mutate(next);
   try {

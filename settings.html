@@ -7,6 +7,17 @@
     <link rel="stylesheet" href="/src/settings/settings.css" />
   </head>
   <body>
+    <!-- 自绘标题栏：整条透明，空白处拖动窗口、双击最大化 / 还原；右上角是窗口按钮 -->
+    <div id="titlebar" data-tauri-drag-region>
+      <div class="caption">
+        <button id="win-min" type="button" data-i18n-title="window.minimize" data-i18n-aria="window.minimize"><svg viewBox="0 0 10 10"><path d="M0 5h10" /></svg></button>
+        <button id="win-max" type="button" data-i18n-title="window.maximize" data-i18n-aria="window.maximize">
+          <svg class="i-max" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" rx="1" /></svg>
+          <svg class="i-restore" viewBox="0 0 10 10"><rect x=".5" y="2.5" width="7" height="7" rx="1" /><path d="M2.5 2.5v-1a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1" /></svg>
+        </button>
+        <button id="win-close" type="button" data-i18n-title="window.close" data-i18n-aria="window.close"><svg viewBox="0 0 10 10"><path d="M.5.5l9 9M9.5.5l-9 9" /></svg></button>
+      </div>
+    </div>
     <nav id="nav">
       <div class="brand">
         <svg class="brand-mark" viewBox="36 36 184 184" aria-hidden="true">

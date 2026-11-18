@@ -23,6 +23,8 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
         .title(t!("window.settings", app = t!("app.name")))
         .inner_size(1000.0, 720.0)
         .min_inner_size(760.0, 520.0)
+        // 不用系统标题栏：顶部空白处作拖动区，最小化 / 最大化 / 关闭按钮由页面自己画（见 settings.html 的 #titlebar）
+        .decorations(false)
         .center()
         .build()
         .map(|_| ())
@@ -166,6 +168,27 @@ pub fn store_stats() -> Result<store::Stats, String> {
 pub async fn engine_test(id: String) -> Result<translate::EngineTest, String> {
     let cfg = config::load()?;
     translate::test_engine(&cfg, &id).await
+}
+
+/// 列出大模型接口提供的模型（用已保存的接口地址、密钥和代理）
+#[tauri::command]
+pub async fn llm_models(id: String) -> Result<Vec<String>, String> {
+    let cfg = config::load()?;
+    translate::list_models(&cfg.provider(&id)).await
+}
+
+/// 选择要接管的程序：弹出文件选择框，返回所选 .exe 的路径；用户取消时返回 None
+#[tauri::command]
+pub async fn pick_exe(app: AppHandle, current: String) -> Result<Option<String>, String> {
+    let owner = app
+        .get_webview_window(SETTINGS_LABEL)
+        .and_then(|w| w.hwnd().ok())
+        .map_or(0, |h| h.0 as isize);
+    let initial = std::path::Path::new(current.trim()).parent().map(std::path::Path::to_path_buf);
+    let title = t!("dialog.pick_exe");
+    tauri::async_runtime::spawn_blocking(move || crate::dialog::pick_exe(owner, &title, initial.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 从设置窗口发起框选：先把设置窗口收起来，免得挡住要翻译的内容，也免得被截进画面

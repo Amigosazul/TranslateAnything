@@ -1,8 +1,9 @@
-// 常规：界面语言、目标语言、译文库开关、文件位置（显示大小，译文库可搬家）
+// 常规：界面语言、目标语言、网络代理、译文库开关、文件位置（显示大小，译文库可搬家）
 import { invoke } from "@tauri-apps/api/core";
 import { S, cfg, langs, loadStats, loadView, refresh, saveConfig } from "../state";
 import { confirmDialog, dropdown, errText, fileSize, h, icon, pageHead, section, switchEl, toast, type IconName } from "../ui";
 import { t, uiLocales } from "../../i18n";
+import { proxyField } from "./engines";
 
 let moving = false;
 
@@ -89,6 +90,11 @@ export function renderGeneral(root: HTMLElement) {
           (val) => saveConfig((x) => (x.target_lang = val), t("general.targetLangChanged")),
           { width: "100%" },
         ),
+      ),
+      row(
+        t("general.proxy"),
+        t("general.proxyDesc"),
+        proxyField(c.proxy ?? "", null, (val) => saveConfig((x) => (x.proxy = val))),
       ),
       row(
         t("general.useStore"),

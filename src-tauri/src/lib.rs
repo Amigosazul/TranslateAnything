@@ -105,6 +105,8 @@ pub fn run() {
             settings::open_settings_window,
             settings::store_stats,
             settings::engine_test,
+            settings::llm_models,
+            settings::pick_exe,
             settings::overlay_start,
             settings::ocr_languages,
             settings::frames_count,

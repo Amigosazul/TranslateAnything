@@ -1,4 +1,4 @@
-//! 系统对话框：选择文件夹、在资源管理器中定位文件。直接调 Windows 外壳接口，不额外引入插件。
+//! 系统对话框：选择文件夹 / 程序、在资源管理器中定位文件。直接调 Windows 外壳接口，不额外引入插件。
 
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -7,21 +7,38 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
     CoTaskMemFree, CoUninitialize,
 };
+use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
-    FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName,
-    SIGDN_FILESYSPATH,
+    FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
+    SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
-use windows::core::HSTRING;
+use windows::core::{HSTRING, PCWSTR};
 
 /// 弹出"选择文件夹"对话框（以 `owner` 为父窗口，模态）。用户取消时返回 `Ok(None)`。
 /// 会阻塞当前线程直到对话框关闭，请在后台线程调用。
 pub fn pick_folder(owner: isize, title: &str, initial: Option<&Path>) -> Result<Option<String>, String> {
+    pick(owner, title, initial, None)
+}
+
+/// 弹出"选择程序"对话框，只列出 .exe；`initial` 是初始所在的文件夹。用法同 [`pick_folder`]
+pub fn pick_exe(owner: isize, title: &str, initial: Option<&Path>) -> Result<Option<String>, String> {
+    pick(owner, title, initial, Some(&t!("dialog.exe_filter")))
+}
+
+/// `filter` 为 None 时选文件夹，否则选 .exe 文件（`filter` 是文件类型的显示名）
+fn pick(owner: isize, title: &str, initial: Option<&Path>, filter: Option<&str>) -> Result<Option<String>, String> {
     unsafe {
         let inited = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).is_ok();
         let result = (|| -> windows::core::Result<Option<String>> {
             let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-            dlg.SetOptions(dlg.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
+            let mode = if filter.is_some() { FOS_FILEMUSTEXIST } else { FOS_PICKFOLDERS };
+            dlg.SetOptions(dlg.GetOptions()? | mode | FOS_FORCEFILESYSTEM)?;
             dlg.SetTitle(&HSTRING::from(title))?;
+            // 两个 HSTRING 要活到对话框关闭
+            let types = filter.map(|f| (HSTRING::from(f), HSTRING::from("*.exe")));
+            if let Some((name, spec)) = &types {
+                dlg.SetFileTypes(&[COMDLG_FILTERSPEC { pszName: PCWSTR(name.as_ptr()), pszSpec: PCWSTR(spec.as_ptr()) }])?;
+            }
             if let Some(dir) = initial.filter(|d| d.is_dir()) {
                 if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(dir.as_os_str()), None) {
                     let _ = dlg.SetFolder(&item);

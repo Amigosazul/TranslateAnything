@@ -10,6 +10,7 @@ import {
   field,
   h,
   icon,
+  hotkeyInput,
   keys,
   openDialog,
   pageHead,
@@ -111,11 +112,7 @@ export function renderImmersive(root: HTMLElement) {
     ),
   );
 
-  const hotkey = h("input", { type: "text", value: im.hotkey, "data-k": "im-hotkey" });
-  hotkey.addEventListener("change", () => {
-    const v = hotkey.value.trim();
-    if (v && v !== im.hotkey) saveConfig((c) => (c.immersive.hotkey = v), t("immersive.toast.hotkeySaved", { app: t("app.name") }));
-  });
+  const hotkey = hotkeyInput(im.hotkey, (v) => saveConfig((c) => (c.immersive.hotkey = v), t("immersive.toast.hotkeySaved", { app: t("app.name") })), "im-hotkey");
 
   const list = h("div", { class: "list" });
   for (const tg of im.targets) list.append(targetCard(tg));
@@ -279,6 +276,29 @@ const blankTarget = (): ImmersiveTarget => ({ name: "", enabled: true, exe: "", 
 function appForm(d: ImmersiveTarget) {
   const name = h("input", { type: "text", value: d.name, placeholder: t("immersive.form.namePh") });
   const exe = h("input", { type: "text", value: d.exe, placeholder: t("immersive.form.exePh"), spellcheck: false });
+  // 不知道程序装在哪时点"浏览"去选
+  const browse = h(
+    "button",
+    {
+      type: "button",
+      class: "input-icon",
+      title: t("immersive.form.browse"),
+      "aria-label": t("immersive.form.browse"),
+      onclick: async () => {
+        try {
+          const p = await invoke<string | null>("pick_exe", { current: exe.value });
+          if (p) {
+            exe.value = p;
+            if (!name.value.trim()) name.value = p.split(/[\\/]/).pop()!.replace(/\.exe$/i, "");
+          }
+        } catch (e) {
+          toast(errText(e), true);
+        }
+      },
+    },
+    icon("folder"),
+  );
+  const exeBox = h("div", { class: "input-wrap" }, exe, browse);
   const port = h("input", { type: "number", value: String(d.port), min: "1024", max: "65535" });
   const args = h("textarea", { rows: 2, placeholder: t("immersive.form.argsPh") });
   args.value = d.args;
@@ -292,7 +312,7 @@ function appForm(d: ImmersiveTarget) {
     { class: "form-grid" },
     field(t("immersive.form.name"), name),
     field(t("immersive.form.port"), port),
-    field(t("immersive.form.exe"), exe, "wide"),
+    field(t("immersive.form.exe"), exeBox, "wide"),
     h(
       "details",
       { class: "pages wide" },

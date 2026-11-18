@@ -5,6 +5,7 @@
   "ocr_lang": "auto",
   "engine": "edge",
   "fallback": ["bing", "google_free"],
+  "proxy": "http://127.0.0.1:7897",
   "persist_cache": true,
   "builtin_glossary": true,
   "glossary": {
@@ -27,11 +28,13 @@
     ]
   },
   "engines": {
-    "edge": {},
-    "bing": {},
-    "google_free": {
-      "proxy": "http://127.0.0.1:7897"
+    "edge": {
+      "proxy": "direct"
     },
+    "bing": {
+      "proxy": "direct"
+    },
+    "google_free": {},
     "microsoft": {
       "api_key": "在此填写你的 key",
       "region": "eastasia"

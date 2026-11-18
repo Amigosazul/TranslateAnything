@@ -54,8 +54,9 @@ const ICONS = {
   down: '<path d="m6 9 6 6 6-6"/>',
   chevL: '<path d="m15 6-6 6 6 6"/>',
   chevR: '<path d="m9 6 6 6-6 6"/>',
-grip: '<g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g>',
+  grip: '<g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3L19.5 9"/><path d="M19.5 4v5h-5"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -166,6 +167,264 @@ export interface DropOption<T extends string> {
 
 let openDrop: (() => void) | null = null;
 
+/** 弹出层定位：默认在锚点下方，放不下且上方更宽裕时翻到上方 */
+function placePop(pop: HTMLElement, anchor: HTMLElement) {
+  const r = anchor.getBoundingClientRect();
+  const ph = Math.min(pop.scrollHeight, 300);
+  const below = window.innerHeight - r.bottom - 12;
+  const up = below < ph && r.top > below;
+  pop.style.top = pop.style.bottom = "";
+  pop.classList.toggle("up", up);
+  pop.style.minWidth = `${r.width}px`;
+  pop.style.left = `${Math.min(r.left, window.innerWidth - Math.max(r.width, pop.offsetWidth) - 8)}px`;
+  pop.style.maxHeight = `${Math.max(120, Math.min(300, up ? r.top - 12 : below))}px`;
+  if (up) pop.style.bottom = `${window.innerHeight - r.top + 4}px`;
+  else pop.style.top = `${r.bottom + 4}px`;
+}
+
+export interface ComboOpts {
+  placeholder?: string;
+  /** 输入框的 data-k（刷新界面时据此恢复焦点） */
+  key?: string;
+  /** 固定的候选项 */
+  options?: DropOption<string>[];
+  /** 打开时异步获取候选项（如模型列表）；失败时把错误信息显示在弹出层里 */
+  load?: () => Promise<DropOption<string>[]>;
+  /** 右侧按钮的提示 */
+  title?: string;
+}
+
+type ComboEl = HTMLElement & { reopen?: (list: DropOption<string>[] | null, err: string) => void };
+
+/**
+ * 可输入的下拉框：既能从候选项里挑，也能自己填写（候选项不全或想填别的值时）。
+ * 输入时按输入内容筛选候选项；改完一项（失焦、回车或选中候选项）调用 `onCommit`。
+ */
+export function combo(value: string, onCommit: (v: string) => void, opts: ComboOpts = {}): HTMLElement {
+  let committed = value;
+  let loaded: DropOption<string>[] | null = opts.options ?? (opts.load ? null : []);
+  let loadError = "";
+  let loading = false;
+  let pop: HTMLElement | null = null;
+  let shown: DropOption<string>[] = [];
+  let active = -1;
+
+  const input = h("input", { type: "text", value, placeholder: opts.placeholder, "data-k": opts.key, autocomplete: "off", spellcheck: false });
+  const btn = h(
+    "button",
+    { type: "button", class: "input-icon", tabIndex: -1, title: opts.title ?? t("common.showOptions"), "aria-label": opts.title ?? t("common.showOptions") },
+    icon(opts.load ? "refresh" : "down"),
+  );
+  const wrap = h("div", { class: "input-wrap combo" }, input, btn);
+
+  const commit = () => {
+    const v = input.value.trim();
+    if (v === committed) return;
+    committed = v;
+    onCommit(v);
+  };
+  const choose = (o: DropOption<string>) => {
+    input.value = o.value;
+    close();
+    commit();
+  };
+
+  const close = () => {
+    if (!pop) return;
+    const p = pop;
+    pop = null;
+    wrap.classList.remove("open");
+    p.classList.add("leaving");
+    afterLeave(p, () => p.remove());
+    document.removeEventListener("pointerdown", onOutside, true);
+    window.removeEventListener("resize", onDismiss);
+    document.querySelector("main")?.removeEventListener("scroll", onDismiss);
+    if (openDrop === close) openDrop = null;
+  };
+  const onDismiss = () => close();
+  const onOutside = (e: Event) => {
+    if (!wrap.contains(e.target as Node) && !pop?.contains(e.target as Node)) close();
+  };
+
+  const setActive = (i: number) => {
+    active = i;
+    if (!pop) return;
+    const items = pop.querySelectorAll<HTMLElement>(".dd-item:not(.disabled)");
+    items.forEach((el, j) => el.classList.toggle("active", j === i));
+    const el = items[i];
+    if (el) {
+      if (el.offsetTop < pop.scrollTop) pop.scrollTop = el.offsetTop - 5;
+      else if (el.offsetTop + el.offsetHeight > pop.scrollTop + pop.clientHeight) pop.scrollTop = el.offsetTop + el.offsetHeight - pop.clientHeight + 5;
+    }
+  };
+
+  /** 按输入内容筛选并重画弹出层；`all` 为 true 时不筛选（点按钮打开时） */
+  const render = (all: boolean) => {
+    const q = all ? "" : input.value.trim().toLowerCase();
+    const note = (text: string, bad = false) => h("div", { class: `dd-item disabled${bad ? " bad" : ""}` }, h("div", { class: "grow dd-hint" }, text));
+    let children: HTMLElement[];
+    if (loading) children = [note(t("common.loading"))];
+    else if (loadError) children = [note(loadError, true)];
+    else {
+      shown = (loaded ?? []).filter((o) => !q || `${o.value}\n${o.label}\n${o.hint ?? ""}`.toLowerCase().includes(q));
+      if (!shown.length) {
+        // 打字筛选没有结果时直接收起，不打扰输入
+        if (q) return close();
+        children = [note(t("common.noOptions"))];
+      } else
+        children = shown.map((o) =>
+          h(
+            "div",
+            {
+              class: `dd-item${o.value === input.value.trim() ? " selected" : ""}`,
+              role: "option",
+              onclick: () => choose(o),
+            },
+            h("div", { class: "grow" }, h("div", {}, o.label), o.hint && h("div", { class: "dd-hint" }, o.hint)),
+            o.value === input.value.trim() && h("span", { class: "dd-check" }, icon("check")),
+          ),
+        );
+    }
+    if (!pop) {
+      openDrop?.();
+      pop = h("div", { class: "dd-pop", role: "listbox" });
+      // 点选项时不让输入框失焦（否则会先按半截输入提交一次）
+      pop.addEventListener("pointerdown", (e) => e.preventDefault());
+      document.body.append(pop);
+      wrap.classList.add("open");
+      openDrop = close;
+      document.addEventListener("pointerdown", onOutside, true);
+      window.addEventListener("resize", onDismiss);
+      document.querySelector("main")?.addEventListener("scroll", onDismiss, { passive: true });
+    }
+    pop.replaceChildren(...children);
+    placePop(pop, wrap);
+    active = -1;
+  };
+
+  const open = async (all: boolean, reload = false) => {
+    if (opts.load && (reload || (!loaded && !loading))) {
+      loading = true;
+      loadError = "";
+      render(true);
+      try {
+        loaded = await opts.load();
+      } catch (e) {
+        loaded = null;
+        loadError = errText(e);
+      }
+      loading = false;
+      if (!pop) return;
+      // 获取期间界面重画过（例如先保存了刚改的地址），换到新的输入框上展示结果
+      if (!wrap.isConnected) {
+        close();
+        const next = opts.key ? document.querySelector(`[data-k="${opts.key}"]`)?.closest<HTMLElement>(".combo") : null;
+        (next as ComboEl | null)?.reopen?.(loaded, loadError);
+        return;
+      }
+    }
+    render(all);
+  };
+  (wrap as ComboEl).reopen = (list, err) => {
+    loaded = list;
+    loadError = err;
+    input.focus();
+    render(true);
+  };
+
+  btn.addEventListener("pointerdown", (e) => e.preventDefault());
+  btn.addEventListener("click", () => {
+    input.focus();
+    // 带获取功能的按钮每次都重新获取（换了密钥或地址后能看到新结果）
+    if (opts.load) void open(true, true);
+    else if (pop) close();
+    else void open(true);
+  });
+  input.addEventListener("input", () => {
+    if (loaded && !loading) render(false);
+  });
+  input.addEventListener("change", commit);
+  input.addEventListener("keydown", (e) => {
+    const n = pop?.querySelectorAll(".dd-item:not(.disabled)").length ?? 0;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!pop) return void open(true);
+      if (n) setActive((active + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+    } else if (e.key === "Enter") {
+      if (pop && active >= 0 && shown[active]) choose(shown[active]);
+      else {
+        close();
+        commit();
+      }
+    } else if (e.key === "Escape" && pop) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    } else if (e.key === "Tab") close();
+  });
+  return wrap;
+}
+
+const MOD_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
+
+/** 把键盘事件的物理键位换成快捷键里的键名；不支持的键返回空串 */
+function keyName(code: string): string {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^F\d{1,2}$/.test(code)) return code;
+  if (code.startsWith("Arrow")) return code.slice(5);
+  const ok = ["Space", "Enter", "Tab", "Backspace", "Delete", "Insert", "Home", "End", "PageUp", "PageDown", "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote", "Backquote", "Comma", "Period", "Slash"];
+  if (ok.includes(code) || /^Numpad\d$/.test(code)) return code;
+  return "";
+}
+
+/**
+ * 快捷键录制框：点一下后直接按下想要的组合键，不用自己拼写"Alt+Shift+T"。
+ * 必须带修饰键（F1–F24 除外）；Esc 取消录制。
+ */
+export function hotkeyInput(value: string, onCommit: (v: string) => void, key?: string): HTMLInputElement {
+  let current = value;
+  const input = h("input", { type: "text", value, readOnly: true, class: "hotkey-input", placeholder: t("common.hotkeyPress"), "data-k": key, title: t("common.hotkeyHint") });
+  const show = (v: string) => (input.value = v);
+  input.addEventListener("focus", () => {
+    input.classList.add("recording");
+    show("");
+  });
+  input.addEventListener("blur", () => {
+    input.classList.remove("recording");
+    show(current);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Tab" && !e.ctrlKey && !e.altKey) return;
+    e.preventDefault();
+    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean) as string[];
+    if (e.key === "Escape" && !mods.length) {
+      show(current);
+      return input.blur();
+    }
+    if (MOD_KEYS.has(e.key)) return show(`${mods.join("+")}+`);
+    const k = keyName(e.code);
+    if (!k || (!mods.length && !/^F\d{1,2}$/.test(k))) {
+      show(mods.length ? `${mods.join("+")}+` : "");
+      return toast(t("common.hotkeyNeedMod"), true);
+    }
+    const v = [...mods, k].join("+");
+    show(v);
+    if (v !== current) {
+      current = v;
+      onCommit(v);
+    }
+    input.blur();
+  });
+  // 松开修饰键时只显示仍按着的
+  input.addEventListener("keyup", (e) => {
+    if (!input.classList.contains("recording") || !input.value.endsWith("+")) return;
+    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
+    show(mods.length ? `${mods.join("+")}+` : "");
+  });
+  return input;
+}
+
 /**
  * 下拉选择框（替代原生 select：原生弹出列表无法定制样式和动效）。
  * 弹出层挂在 body 上、按触发按钮定位，不会被卡片的 overflow 裁掉；空间不够时向上弹出。
@@ -269,18 +528,7 @@ export function dropdown<T extends string>(
     pop.append(...items);
     document.body.append(pop);
 
-    // 定位：默认在下方，放不下且上方更宽裕时翻到上方
-    const r = trigger.getBoundingClientRect();
-    const ph = Math.min(pop.scrollHeight, 300);
-    const below = window.innerHeight - r.bottom - 12;
-    const up = below < ph && r.top > below;
-    pop.style.minWidth = `${r.width}px`;
-    pop.style.left = `${Math.min(r.left, window.innerWidth - Math.max(r.width, pop.offsetWidth) - 8)}px`;
-    pop.style.maxHeight = `${Math.max(120, Math.min(300, up ? r.top - 12 : below))}px`;
-    if (up) {
-      pop.style.bottom = `${window.innerHeight - r.top + 4}px`;
-      pop.classList.add("up");
-    } else pop.style.top = `${r.bottom + 4}px`;
+    placePop(pop, trigger);
 
     trigger.classList.add("open");
     trigger.setAttribute("aria-expanded", "true");

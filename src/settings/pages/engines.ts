@@ -11,11 +11,13 @@ import {
   refresh,
   saveConfig,
   setEngineChain,
+  settled,
   testEngine,
   type ProviderConfig,
 } from "../state";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../../i18n";
-import { field, h, icon, pageHead, section, segmented, switchEl, toast } from "../ui";
+import { combo, dropdown, field, h, icon, pageHead, section, segmented, switchEl, toast, type DropOption } from "../ui";
 
 /** 可配置的参数；标签和提示文字取 engines.field.<参数>.label / .ph */
 const FIELDS = new Set(["base_url", "api_key", "region", "model", "proxy"]);
@@ -38,18 +40,213 @@ function setParam(id: string, key: string, raw: string) {
   });
 }
 
-/** 某个引擎的参数表单；改完一项（失焦或回车）就保存 */
+// ───────────────────────── 候选项 ─────────────────────────
+// 用户多半不知道这些参数能填什么，给出常用值供挑选，同时允许自己填写
+
+/** Azure 区域代码与英文显示名（与 Azure 门户一致）；global 的说明取 engines.region.global */
+const AZURE_REGIONS: [string, string][] = [
+  ["eastasia", "East Asia (Hong Kong)"],
+  ["southeastasia", "Southeast Asia (Singapore)"],
+  ["japaneast", "Japan East"],
+  ["japanwest", "Japan West"],
+  ["koreacentral", "Korea Central"],
+  ["centralindia", "Central India"],
+  ["australiaeast", "Australia East"],
+  ["eastus", "East US"],
+  ["eastus2", "East US 2"],
+  ["westus", "West US"],
+  ["westus2", "West US 2"],
+  ["westus3", "West US 3"],
+  ["centralus", "Central US"],
+  ["northcentralus", "North Central US"],
+  ["southcentralus", "South Central US"],
+  ["westcentralus", "West Central US"],
+  ["canadacentral", "Canada Central"],
+  ["brazilsouth", "Brazil South"],
+  ["northeurope", "North Europe"],
+  ["westeurope", "West Europe"],
+  ["uksouth", "UK South"],
+  ["francecentral", "France Central"],
+  ["germanywestcentral", "Germany West Central"],
+  ["switzerlandnorth", "Switzerland North"],
+  ["norwayeast", "Norway East"],
+  ["swedencentral", "Sweden Central"],
+  ["uaenorth", "UAE North"],
+  ["qatarcentral", "Qatar Central"],
+  ["southafricanorth", "South Africa North"],
+  ["chinaeast2", "China East 2 (21Vianet)"],
+  ["chinanorth3", "China North 3 (21Vianet)"],
+];
+
+function regionOptions(): DropOption<string>[] {
+  return [
+    { value: "global", label: t("engines.region.global"), hint: "global" },
+    ...AZURE_REGIONS.map(([value, label]) => ({ value, label, hint: value })),
+  ];
+}
+
+/**
+ * 各引擎接口地址的常用值。label 以 "@" 开头的取文案键 engines.preset.<名>，其余是服务商名称原样显示。
+ * 大模型（openai）列的都是 OpenAI 兼容接口
+ */
+const BASE_PRESETS: Record<string, [string, string][]> = {
+  openai: [
+    ["https://api.openai.com/v1", "OpenAI"],
+    ["https://api.anthropic.com/v1", "Anthropic Claude"],
+    ["https://generativelanguage.googleapis.com/v1beta/openai", "Google Gemini"],
+    ["https://api.deepseek.com/v1", "DeepSeek"],
+    ["https://dashscope.aliyuncs.com/compatible-mode/v1", "@dashscope"],
+    ["https://ark.cn-beijing.volces.com/api/v3", "@volcengine"],
+    ["https://open.bigmodel.cn/api/paas/v4", "@zhipu"],
+    ["https://api.moonshot.cn/v1", "@moonshot"],
+    ["https://api.siliconflow.cn/v1", "@siliconflow"],
+    ["https://openrouter.ai/api/v1", "OpenRouter"],
+    ["https://api.groq.com/openai/v1", "Groq"],
+    ["https://api.mistral.ai/v1", "Mistral"],
+    ["https://api.x.ai/v1", "xAI Grok"],
+    ["http://localhost:11434/v1", "@ollama"],
+    ["http://localhost:1234/v1", "@lmstudio"],
+  ],
+  microsoft: [
+    ["", "@msGlobal"],
+    ["https://api-apc.cognitive.microsofttranslator.com", "@msApc"],
+    ["https://api-eur.cognitive.microsofttranslator.com", "@msEur"],
+    ["https://api-nam.cognitive.microsofttranslator.com", "@msNam"],
+    ["https://api.translator.azure.cn", "@msChina"],
+  ],
+  deepl: [
+    ["", "@deeplAuto"],
+    ["https://api-free.deepl.com", "@deeplFree"],
+    ["https://api.deepl.com", "@deeplPro"],
+  ],
+  deeplx: [["http://127.0.0.1:1188/translate", "@deeplxLocal"]],
+};
+
+function presetOptions(kind: string): DropOption<string>[] | null {
+  const list = BASE_PRESETS[kind];
+  if (!list) return null;
+  return list.map(([value, label]) => ({
+    value,
+    label: label.startsWith("@") ? t(`engines.preset.${label.slice(1)}`) : label,
+    hint: value || t("engines.preset.defaultHint"),
+  }));
+}
+
+/** 获取到的模型列表，按"地址 + 密钥 + 代理"缓存，界面重画后不必重新请求 */
+const modelCache = new Map<string, string[]>();
+
+/** 大模型的模型输入框：点右侧按钮从接口获取可用模型，也可以直接填写 */
+export function modelCombo(id: string, onCommit: (v: string) => void, key = `eng-${id}-model`): HTMLElement {
+  const cacheKey = () => {
+    const p = cfg().engines[id] ?? blank();
+    return `${p.base_url}\n${p.api_key}\n${p.proxy ?? ""}\n${cfg().proxy ?? ""}`;
+  };
+  const toOptions = (ids: string[]) => ids.map((m) => ({ value: m, label: m }));
+  const cached = modelCache.get(cacheKey());
+  return combo(cfg().engines[id]?.model ?? "", onCommit, {
+    key,
+    placeholder: t("engines.field.model.ph"),
+    title: t("engines.model.fetch"),
+    // 已获取过的列表直接用于输入筛选；点按钮总是重新获取
+    options: cached && toOptions(cached),
+    load: async () => {
+      // 刚改的接口地址 / 密钥可能还在保存，等保存完再按新配置获取
+      await settled();
+      if (!cfg().engines[id]?.base_url?.trim()) throw new Error(t("engines.model.needBase"));
+      const ids = await invoke<string[]>("llm_models", { id });
+      modelCache.set(cacheKey(), ids);
+      return toOptions(ids);
+    },
+  });
+}
+
+/** 代理的几种取值：跟随全局（仅单个引擎）/ 直连 / 系统代理 / 自定义地址 */
+type ProxyMode = "" | "direct" | "system" | "custom";
+const PROXY_SUGGEST: DropOption<string>[] = [
+  { value: "http://127.0.0.1:7890", label: "http://127.0.0.1:7890", hint: "Clash / Mihomo" },
+  { value: "http://127.0.0.1:7897", label: "http://127.0.0.1:7897", hint: "Clash Verge Rev" },
+  { value: "http://127.0.0.1:10809", label: "http://127.0.0.1:10809", hint: "v2rayN" },
+  { value: "http://127.0.0.1:1080", label: "http://127.0.0.1:1080", hint: "Shadowsocks" },
+];
+/** 选了"自定义"但还没填地址的代理框（键：引擎 id，全局为空串） */
+const customProxy = new Set<string>();
+
+/**
+ * 代理选择：先选方式，选"自定义"再填地址。
+ * `scope` 为引擎 id 时多一个"跟随全局"（值为空）；为 null 时是全局代理，空值即直连
+ */
+export function proxyField(value: string, scope: string | null, onCommit: (v: string) => void): HTMLElement {
+  const engine = scope !== null;
+  const tag = scope ?? "";
+  const v = value.trim();
+  let mode: ProxyMode = v === "system" ? "system" : v === "direct" ? (engine ? "direct" : "") : v ? "custom" : "";
+  if (!v && customProxy.has(tag)) mode = "custom";
+  const modes: DropOption<ProxyMode>[] = [
+    engine ? { value: "", label: t("proxy.followGlobal"), hint: t("proxy.followGlobalHint") } : { value: "", label: t("proxy.direct") },
+    ...(engine ? [{ value: "direct" as ProxyMode, label: t("proxy.direct") }] : []),
+    { value: "system", label: t("proxy.system"), hint: t("proxy.systemHint") },
+    { value: "custom", label: t("proxy.custom"), hint: t("proxy.customHint") },
+  ];
+  const pick = dropdown(
+    modes,
+    mode,
+    (m) => {
+      if (m === "custom") {
+        customProxy.add(tag);
+        refresh();
+        return;
+      }
+      customProxy.delete(tag);
+      onCommit(m);
+    },
+    { width: "100%" },
+  );
+  if (mode !== "custom") return pick;
+  const addr = combo(
+    v,
+    (a) => {
+      if (a) customProxy.delete(tag);
+      onCommit(a);
+    },
+    { key: `proxy-${tag}`, placeholder: t("proxy.customPh"), options: PROXY_SUGGEST },
+  );
+  return h("div", { class: "proxy-field" }, pick, addr);
+}
+
+/** 某个引擎的参数表单；改完一项（失焦、回车或选中候选项）就保存 */
 export function paramFields(id: string, fields: string[], llm = false): HTMLElement {
   const p = cfg().engines[id] ?? blank();
+  const kind = kindOf(cfg(), id);
   const grid = h("div", { class: "form-grid two" });
   for (const key of fields) {
     if (!FIELDS.has(key)) continue;
     const secret = SECRET.has(key);
     const value = key === "proxy" ? p.proxy ?? "" : ((p as unknown as Record<string, string>)[key] ?? "");
+    const label = t(`engines.field.${key}.label`);
+    const wide = key === "proxy" || key === "base_url" ? "wide" : "";
+    const save = (v: string) => void setParam(id, key, v);
+    if (key === "model") {
+      grid.append(field(label, modelCombo(id, save), wide));
+      continue;
+    }
+    if (key === "proxy") {
+      grid.append(field(label, proxyField(value, id, save), wide));
+      continue;
+    }
+    const ph = llm && LLM_PLACEHOLDER.has(key) ? t(`engines.field.${key}.llmPh`) : t(`engines.field.${key}.ph`);
+    if (key === "region") {
+      grid.append(field(label, combo(value, save, { key: `eng-${id}-region`, placeholder: ph, options: regionOptions() }), wide));
+      continue;
+    }
+    const presets = key === "base_url" ? presetOptions(kind) : null;
+    if (presets) {
+      grid.append(field(label, combo(value, save, { key: `eng-${id}-base_url`, placeholder: ph, options: presets }), wide));
+      continue;
+    }
     const input = h("input", {
       type: secret ? "password" : "text",
       value,
-      placeholder: llm && LLM_PLACEHOLDER.has(key) ? t(`engines.field.${key}.llmPh`) : t(`engines.field.${key}.ph`),
+      placeholder: ph,
       "data-k": `eng-${id}-${key}`,
       autocomplete: "off",
       spellcheck: false,
@@ -60,7 +257,7 @@ export function paramFields(id: string, fields: string[], llm = false): HTMLElem
       const eye = h("button", { type: "button", class: "input-icon", title: t("engines.toggleSecret"), onclick: () => (input.type = input.type === "password" ? "text" : "password") }, icon("eye"));
       control = h("div", { class: "input-wrap" }, input, eye);
     }
-    grid.append(field(t(`engines.field.${key}.label`), control, key === "proxy" || key === "base_url" ? "wide" : ""));
+    grid.append(field(label, control, wide));
   }
   return grid;
 }

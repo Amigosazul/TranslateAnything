@@ -1,6 +1,7 @@
 // 设置窗口入口：导航、页面切换、后端事件
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { S, loadStats, loadView, setRerender, type EngineInfo, type TargetStatus } from "./state";
 import { errText, h } from "./ui";
 import { setNav } from "./nav";
@@ -121,6 +122,21 @@ mainEl.addEventListener(
 );
 toTop.addEventListener("click", () => mainEl.scrollTo({ top: 0, behavior: "smooth" }));
 
+// 自绘标题栏的窗口按钮；最大化后按钮换成"向下还原"
+const win = getCurrentWindow();
+const maxBtn = document.getElementById("win-max")!;
+document.getElementById("win-min")!.addEventListener("click", () => void win.minimize());
+maxBtn.addEventListener("click", () => void win.toggleMaximize());
+document.getElementById("win-close")!.addEventListener("click", () => void win.close());
+async function syncMaximized() {
+  const max = await win.isMaximized();
+  maxBtn.classList.toggle("maximized", max);
+  const key = max ? "window.restore" : "window.maximize";
+  maxBtn.title = t(key);
+  maxBtn.setAttribute("aria-label", t(key));
+}
+void win.onResized(() => void syncMaximized());
+
 // 概览和悬浮窗页显示"打开中的翻译框"个数，翻译框由用户随手关掉，定时刷新一下
 setInterval(async () => {
   if (document.hidden || (current !== "dashboard" && current !== "overlay")) return;
@@ -139,6 +155,7 @@ setInterval(async () => {
   // 英文界面下品牌名本身就是 Translate Anything，副标题重复，只在中文界面显示
   const sub = document.querySelector<HTMLElement>(".brand-sub");
   if (sub) sub.hidden = !isZh();
+  void syncMaximized();
   try {
     await loadView();
     [S.statuses, S.catalog] = await Promise.all([

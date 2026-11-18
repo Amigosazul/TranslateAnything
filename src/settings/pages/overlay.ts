@@ -1,7 +1,7 @@
 // 悬浮窗模式：框选翻译的入口、快捷键、识别方式与识别语言
 import { invoke } from "@tauri-apps/api/core";
 import { S, cfg, refresh, saveConfig } from "../state";
-import { dropdown, errText, h, icon, keys, pageHead, segmented, toast } from "../ui";
+import { dropdown, errText, h, hotkeyInput, icon, keys, pageHead, segmented, toast } from "../ui";
 import { t } from "../../i18n";
 
 export async function loadFrames() {
@@ -70,11 +70,7 @@ export function renderOverlay(root: HTMLElement) {
     ),
   );
 
-  const hotkey = h("input", { type: "text", value: c.hotkey, "data-k": "overlay-hotkey" });
-  hotkey.addEventListener("change", () => {
-    const v = hotkey.value.trim();
-    if (v && v !== c.hotkey) saveConfig((x) => (x.hotkey = v), t("overlayPage.hotkeySaved", { app: t("app.name") }));
-  });
+  const hotkey = hotkeyInput(c.hotkey, (v) => saveConfig((x) => (x.hotkey = v), t("overlayPage.hotkeySaved", { app: t("app.name") })), "overlay-hotkey");
 
   const langs = S.ocrLangs;
   const langPick = dropdown(

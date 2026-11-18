@@ -30,6 +30,39 @@ impl OpenAICompatible {
     }
 }
 
+/// 列出接口提供的模型。各家兼容接口基本都实现了 `GET /models`（返回 `data[].id`）；
+/// Ollama 原生接口返回 `models[].name`，一并兼容
+pub async fn list_models(cfg: &ProviderConfig) -> Result<Vec<String>, TranslateError> {
+    let base = cfg.base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err(TranslateError::Config(t!("err.engine.no_base_url")));
+    }
+    let mut req = build_client(cfg)?.get(format!("{base}/models"));
+    let key = cfg.api_key.trim();
+    if !key.is_empty() {
+        req = req.bearer_auth(key);
+        // Anthropic 的模型列表只认自己的鉴权头
+        if base.contains("anthropic.com") {
+            req = req.header("x-api-key", key).header("anthropic-version", "2023-06-01");
+        }
+    }
+    let v = send_json(req, "/error/message").await?;
+    let list = v
+        .pointer("/data")
+        .or_else(|| v.pointer("/models"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| parse_err(&v))?;
+    // Gemini 的 id 带 "models/" 前缀，对话接口不需要
+    let mut ids: Vec<String> = list
+        .iter()
+        .filter_map(|m| m.get("id").or_else(|| m.get("name")).and_then(Value::as_str))
+        .map(|s| s.trim_start_matches("models/").to_string())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
 fn system_prompt(target_lang: &str) -> String {
     format!(
         "你是专业的翻译引擎。请把用户发来的文本翻译成目标语言（语言代码：{target_lang}）。\

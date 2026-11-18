@@ -124,6 +124,74 @@ svg {
   background: transparent;
 }
 
+/* ───── 自绘标题栏 ─────
+   窗口不带系统标题栏：顶部一条透明拖动区盖在导航与页面标题之上，右上角放窗口按钮 */
+#titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  height: 32px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#titlebar .caption {
+  display: flex;
+  height: 100%;
+}
+
+#titlebar .caption button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-2);
+  cursor: default;
+  transition: background 0.1s, color 0.1s;
+}
+
+#titlebar .caption button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+#titlebar .caption button:active {
+  background: var(--press);
+}
+
+#titlebar #win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+#titlebar #win-close:active {
+  background: #f1707a;
+  color: #fff;
+}
+
+#titlebar svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: geometricPrecision;
+}
+
+#win-max .i-restore,
+#win-max.maximized .i-max {
+  display: none;
+}
+
+#win-max.maximized .i-restore {
+  display: block;
+}
+
 /* ───── 左侧导航 ───── */
 #nav {
   width: 212px;
@@ -304,6 +372,8 @@ main {
   /* 滚动条位置始终预留：内容多到要滚动时宽度不变，组件不会被挤一下 */
   scrollbar-gutter: stable;
   padding: 0 26px 56px 36px;
+  /* 页首不固定后，内容会滚进顶部 32px 的标题栏；在这里渐隐，不和窗口按钮叠在一起 */
+  mask-image: linear-gradient(to bottom, transparent 8px, #000 36px);
 }
 
 /* 滚动条平时隐身，鼠标进入内容区才浮现，看起来像盖在上面的一层 */
@@ -385,7 +455,8 @@ main::-webkit-scrollbar-thumb:hover {
   align-items: flex-end;
   gap: 16px;
   margin-bottom: 18px;
-  padding-top: 30px;
+  /* 顶部 32px 是标题栏拖动区，说明往下让一点 */
+  padding-top: 40px;
 }
 
 /* 回到顶部 */
@@ -2327,4 +2398,40 @@ h2.section .btn {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ── 可输入的下拉框（combo）、代理选择、快捷键录制 ── */
+
+.input-wrap.combo.open input {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.input-wrap.combo.open button.input-icon {
+  color: var(--accent);
+}
+
+.dd-item.bad .dd-hint {
+  color: var(--bad, #d14343);
+  white-space: pre-wrap;
+}
+
+.proxy-field {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) 1fr;
+  gap: 8px;
+}
+
+input.hotkey-input {
+  cursor: pointer;
+  caret-color: transparent;
+}
+
+input.hotkey-input.recording {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+input.hotkey-input.recording::placeholder {
+  color: var(--accent-text);
 }

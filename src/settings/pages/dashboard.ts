@@ -16,7 +16,7 @@ import { go } from "../nav";
 import { t } from "../../i18n";
 import { setMasterSwitch, toggleAllButton } from "./immersive";
 import { closeAllFrames, startSelect } from "./overlay";
-import { testButton } from "./engines";
+import { modelCombo, testButton } from "./engines";
 
 function tile(ic: IconName, title: string, right: Child, ...body: Child[]): HTMLElement {
   return h(
@@ -140,12 +140,14 @@ export function renderDashboard(root: HTMLElement) {
   } catch {
     host = llm?.base_url ?? "";
   }
-  const model = h("input", { type: "text", value: llm?.model ?? "", placeholder: t("dash.modelPlaceholder"), "data-k": "dash-model", spellcheck: false });
-  model.addEventListener("change", () =>
-    saveConfig((x) => {
-      const p = (x.engines[lid] ??= { base_url: "", api_key: "", region: "", model: "", proxy: null });
-      p.model = model.value.trim();
-    }, t("dash.modelChanged")),
+  const model = modelCombo(
+    lid,
+    (v) =>
+      saveConfig((x) => {
+        const p = (x.engines[lid] ??= { base_url: "", api_key: "", region: "", model: "", proxy: null });
+        p.model = v;
+      }, t("dash.modelChanged")),
+    "dash-model",
   );
   const llmTile = tile(
     "sparkle",
