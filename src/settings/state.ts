@@ -133,9 +133,14 @@ let lastSave: Promise<unknown> = Promise.resolve();
 /** 等正在进行的保存完成（后端按已保存的配置干活前调用，如获取模型列表） */
 export const settled = () => lastSave;
 
+let pending = 0;
+/** 是否有保存还没完成（此时 `cfg()` 可能还是改动前的配置） */
+export const saving = () => pending > 0;
+
 /** 修改配置并保存；成功后重新读取并刷新界面 */
 export function saveConfig(mutate: (c: Config) => void, okMsg: string = t("common.saved")): Promise<boolean> {
-  const p = doSave(mutate, okMsg);
+  pending++;
+  const p = doSave(mutate, okMsg).finally(() => pending--);
   lastSave = p;
   return p;
 }

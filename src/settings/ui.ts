@@ -190,6 +190,8 @@ export interface ComboOpts {
   options?: DropOption<string>[];
   /** 打开时异步获取候选项（如模型列表）；失败时把错误信息显示在弹出层里 */
   load?: () => Promise<DropOption<string>[]>;
+  /** 已获取过且仍有效的候选项；有则点按钮直接展开，不再调用 `load` */
+  cached?: () => DropOption<string>[] | undefined;
   /** 右侧按钮的提示 */
   title?: string;
 }
@@ -213,8 +215,10 @@ export function combo(value: string, onCommit: (v: string) => void, opts: ComboO
   const btn = h(
     "button",
     { type: "button", class: "input-icon", tabIndex: -1, title: opts.title ?? t("common.showOptions"), "aria-label": opts.title ?? t("common.showOptions") },
-    icon(opts.load ? "refresh" : "down"),
+    icon(opts.load && !opts.cached?.() ? "refresh" : "down"),
   );
+  /** 获取成功后按钮改为展开箭头 */
+  const markLoaded = () => btn.replaceChildren(icon("down"));
   const wrap = h("div", { class: "input-wrap combo" }, input, btn);
 
   const commit = () => {
@@ -309,6 +313,7 @@ export function combo(value: string, onCommit: (v: string) => void, opts: ComboO
       render(true);
       try {
         loaded = await opts.load();
+        markLoaded();
       } catch (e) {
         loaded = null;
         loadError = errText(e);
@@ -328,6 +333,7 @@ export function combo(value: string, onCommit: (v: string) => void, opts: ComboO
   (wrap as ComboEl).reopen = (list, err) => {
     loaded = list;
     loadError = err;
+    if (list && !err) markLoaded();
     input.focus();
     render(true);
   };
@@ -335,10 +341,16 @@ export function combo(value: string, onCommit: (v: string) => void, opts: ComboO
   btn.addEventListener("pointerdown", (e) => e.preventDefault());
   btn.addEventListener("click", () => {
     input.focus();
-    // 带获取功能的按钮每次都重新获取（换了密钥或地址后能看到新结果）
-    if (opts.load) void open(true, true);
-    else if (pop) close();
-    else void open(true);
+    if (pop) return close();
+    if (opts.load) {
+      // 已按当前地址 / 密钥获取过就直接展开；没有或已变化才重新获取
+      const c = opts.cached?.();
+      if (c) {
+        loaded = c;
+        loadError = "";
+        void open(true);
+      } else void open(true, true);
+    } else void open(true);
   });
   input.addEventListener("input", () => {
     if (loaded && !loading) render(false);

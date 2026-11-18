@@ -11,6 +11,7 @@ import {
   refresh,
   saveConfig,
   setEngineChain,
+  saving,
   settled,
   testEngine,
   type ProviderConfig,
@@ -142,17 +143,25 @@ export function modelCombo(id: string, onCommit: (v: string) => void, key = `eng
     return `${p.base_url}\n${p.api_key}\n${p.proxy ?? ""}\n${cfg().proxy ?? ""}`;
   };
   const toOptions = (ids: string[]) => ids.map((m) => ({ value: m, label: m }));
-  const cached = modelCache.get(cacheKey());
+  const cachedOptions = () => {
+    // 刚改的地址 / 密钥还在保存时不信缓存，交给 load 等保存完再判断
+    if (saving()) return undefined;
+    const ids = modelCache.get(cacheKey());
+    return ids && toOptions(ids);
+  };
   return combo(cfg().engines[id]?.model ?? "", onCommit, {
     key,
     placeholder: t("engines.field.model.ph"),
     title: t("engines.model.fetch"),
-    // 已获取过的列表直接用于输入筛选；点按钮总是重新获取
-    options: cached && toOptions(cached),
+    // 地址、密钥、代理未变时直接用已获取的列表（输入筛选和点按钮展开）；变了才重新获取
+    options: cachedOptions(),
+    cached: cachedOptions,
     load: async () => {
       // 刚改的接口地址 / 密钥可能还在保存，等保存完再按新配置获取
       await settled();
       if (!cfg().engines[id]?.base_url?.trim()) throw new Error(t("engines.model.needBase"));
+      const hit = modelCache.get(cacheKey());
+      if (hit) return toOptions(hit);
       const ids = await invoke<string[]>("llm_models", { id });
       modelCache.set(cacheKey(), ids);
       return toOptions(ids);
