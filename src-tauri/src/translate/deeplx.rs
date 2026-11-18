@@ -7,6 +7,9 @@ use crate::config::ProviderConfig;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+/// 未填地址时用本机 DeepLX 的默认端口
+pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:1188/translate";
+
 pub struct DeepLX {
     client: reqwest::Client,
     url: String,
@@ -15,10 +18,10 @@ pub struct DeepLX {
 
 impl DeepLX {
     pub fn new(cfg: &ProviderConfig) -> Result<Self, TranslateError> {
-        let url = cfg.base_url.trim().to_string();
-        if url.is_empty() {
-            return Err(TranslateError::Config(t!("err.engine.deeplx_url")));
-        }
+        let url = match cfg.base_url.trim() {
+            "" => DEFAULT_URL.to_string(),
+            u => u.to_string(),
+        };
         Ok(Self {
             client: build_client(cfg)?,
             url,

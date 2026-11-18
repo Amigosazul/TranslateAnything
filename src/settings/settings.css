@@ -1109,8 +1109,10 @@ button.test-btn.fail {
   position: relative;
 }
 
-.input-wrap input {
-  padding-right: 36px;
+/* 带 [type] 提高优先级，否则会被后面"表单"一节的 input[type="text"] 等通用 padding 覆盖，文字压到图标下 */
+.input-wrap input,
+.input-wrap input[type] {
+  padding-right: 34px;
 }
 
 button.input-icon {
@@ -1702,6 +1704,12 @@ textarea {
   height: 32px;
   width: 100%;
   transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+/* WebView2 / Edge 会给密码框自带一个"显示密码"眼睛，与自绘的切换按钮重复，隐藏掉 */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
 }
 
 input::placeholder,

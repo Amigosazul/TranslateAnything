@@ -52,6 +52,17 @@ pub trait Translator: Send + Sync {
         Ok(out)
     }
 
+    /// 指定原文语言批量翻译（`from` 为 BCP 47 代码，如 `zh`、`ja`）。
+    /// 用于自动识别出错时重试，见 [`retry_misdetected`]；不支持指定原文语言的引擎返回 `None`
+    async fn translate_batch_from(
+        &self,
+        _texts: &[String],
+        _from: &str,
+        _target_lang: &str,
+    ) -> Result<Option<Vec<String>>, TranslateError> {
+        Ok(None)
+    }
+
     // 扩展点（P2 视觉直译）：translate_image(&self, png: &[u8], target_lang)，默认返回"不支持"
 }
 
@@ -71,6 +82,8 @@ pub struct EngineInfo {
     pub official: bool,
     /// 该引擎会用到的配置字段
     pub fields: &'static [&'static str],
+    /// 接口地址留空时实际使用的地址（DeepL 为付费版，免费版 key 以 `:fx` 结尾时改用免费版地址）；没有默认值的为空
+    pub default_base_url: &'static str,
     #[serde(serialize_with = "localized")]
     pub note: &'static str,
 }
@@ -86,6 +99,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["proxy"],
+        default_base_url: "",
         note: "engine.edge.note",
     },
     EngineInfo {
@@ -94,6 +108,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["proxy"],
+        default_base_url: "",
         note: "engine.bing.note",
     },
     EngineInfo {
@@ -102,6 +117,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["base_url", "proxy"],
+        default_base_url: google_free::DEFAULT_BASE,
         note: "engine.google_free.note",
     },
     EngineInfo {
@@ -110,6 +126,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["api_key", "region", "base_url", "proxy"],
+        default_base_url: microsoft::DEFAULT_BASE,
         note: "engine.microsoft.note",
     },
     EngineInfo {
@@ -118,6 +135,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["api_key", "base_url", "proxy"],
+        default_base_url: deepl::PRO_BASE,
         note: "engine.deepl.note",
     },
     EngineInfo {
@@ -126,6 +144,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["base_url", "api_key", "proxy"],
+        default_base_url: deeplx::DEFAULT_URL,
         note: "engine.deeplx.note",
     },
     EngineInfo {
@@ -134,6 +153,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["api_key", "base_url", "proxy"],
+        default_base_url: google::DEFAULT_BASE,
         note: "engine.google.note",
     },
     EngineInfo {
@@ -142,6 +162,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["base_url", "api_key", "model", "proxy"],
+        default_base_url: "",
         note: "engine.openai.note",
     },
 ];
@@ -204,17 +225,29 @@ pub fn builtin_glossary(target_lang: &str) -> std::collections::BTreeMap<String,
 
 /// 批量翻译：术语表 → 本地译文库 → 翻译引擎（主引擎 + 回退），引擎结果写回译文库。
 /// 返回（与 `texts` 一一对应的译文，实际使用的引擎名；没有请求引擎时为"本地缓存"）
-pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Result<(Vec<String>, String), String> {
+/// `who` 只用于耗时日志，标明调用方（悬浮窗 / 沉浸模式）
+pub async fn translate_batch_with_fallback(
+    cfg: &Config,
+    texts: &[String],
+    who: &str,
+) -> Result<(Vec<String>, String), String> {
+    use crate::timing::ms;
+    use std::time::Instant;
+    let start = Instant::now();
     let lang = cfg.target_lang.as_str();
     let terms = glossary(cfg);
     let mut found: HashMap<String, String> = texts
         .iter()
         .filter_map(|t| terms.get(t.trim()).map(|g| (t.clone(), g.clone())))
         .collect();
+    let glossary_hits = found.len();
     let rest: Vec<String> = texts.iter().filter(|t| !found.contains_key(*t)).cloned().collect();
+    let t = Instant::now();
     if cfg.persist_cache && !rest.is_empty() {
         found.extend(crate::store::get_many(lang, &rest));
     }
+    let store_time = t.elapsed();
+    let store_hits = found.len() - glossary_hits;
     let mut missing: Vec<String> = Vec::new();
     for t in rest {
         if !found.contains_key(&t) && !missing.contains(&t) {
@@ -222,15 +255,42 @@ pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Re
         }
     }
     let engine = if missing.is_empty() {
+        tlog!(
+            "{who} 翻译 {} 条：术语表命中 {glossary_hits} · 译文库 {} 命中 {store_hits} · 无需请求引擎 · 共 {}",
+            texts.len(),
+            ms(store_time),
+            ms(start.elapsed())
+        );
         cache_engine()
     } else {
-        let (translated, kind) = translate_by_engines(cfg, &missing).await?;
+        let t = Instant::now();
+        let result = translate_by_engines(cfg, &missing).await;
+        let api_time = t.elapsed();
+        let (translated, kind) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                tlog!("{who} 翻译 {} 条：引擎全部失败，耗时 {}", missing.len(), ms(api_time));
+                return Err(e);
+            }
+        };
+        let n = missing.len();
         let pairs: Vec<(String, String)> = missing.into_iter().zip(translated).collect();
+        let t = Instant::now();
         if cfg.persist_cache {
             // 译文库里记引擎 id（与界面语言无关），显示时再换成当前语言的名称
             crate::store::put_many(lang, &pairs, &kind);
         }
+        let save_time = t.elapsed();
         found.extend(pairs);
+        tlog!(
+            "{who} 翻译 {} 条：术语表命中 {glossary_hits} · 译文库 {} 命中 {store_hits} · 引擎【{kind}】{} 条 {} · 写库 {} · 共 {}",
+            texts.len(),
+            ms(store_time),
+            n,
+            ms(api_time),
+            ms(save_time),
+            ms(start.elapsed())
+        );
         engine_name(&kind)
     };
     Ok((texts.iter().map(|t| found[t].clone()).collect(), engine))
@@ -241,17 +301,76 @@ async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<Str
     let mut errors = Vec::new();
     for (id, provider) in cfg.engine_chain() {
         let kind = provider.kind_or(&id);
-        let result = match create(&kind, &provider) {
-            Ok(t) => t.translate_batch(texts, &cfg.target_lang).await,
-            Err(e) => Err(e),
+        let start = std::time::Instant::now();
+        let (engine, result) = match create(&kind, &provider) {
+            Ok(t) => {
+                let r = t.translate_batch(texts, &cfg.target_lang).await;
+                (Some(t), r)
+            }
+            Err(e) => (None, Err(e)),
         };
+        if !matches!(&result, Ok(t) if t.len() == texts.len()) {
+            tlog!("引擎【{kind}】失败，改用下一个，已耗时 {}", crate::timing::ms(start.elapsed()));
+        }
         match result {
-            Ok(t) if t.len() == texts.len() => return Ok((t, kind)),
+            Ok(mut t) if t.len() == texts.len() => {
+                if let Some(e) = &engine {
+                    retry_misdetected(e.as_ref(), texts, &mut t, &cfg.target_lang).await;
+                }
+                return Ok((t, kind));
+            }
             Ok(_) => errors.push(t!("err.engine.count_mismatch", name = engine_name(&kind))),
             Err(e) => errors.push(t!("err.engine.prefixed", name = engine_name(&kind), e = e)),
         }
     }
     Err(errors.join("\n"))
+}
+
+/// 按文字系统推断原文语言：只看目标语言用不到的文字（假名 → 日文，谚文 → 韩文，汉字 → 中文）。
+/// 原文含有这类文字、引擎却原样返回，多半是自动识别错了（"GitHub 提示: NOTE" 拉丁字母多，被判成英文，
+/// 目标又是英文就不翻），此时返回该语言供重试；原文本来就是目标语言的文字时返回 `None`
+fn misdetected_source(text: &str, target_lang: &str) -> Option<&'static str> {
+    let has = |f: fn(char) -> bool| text.chars().any(f);
+    let kana = |c: char| matches!(c, '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}');
+    let hangul = |c: char| matches!(c, '\u{AC00}'..='\u{D7AF}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}');
+    let han = |c: char| matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}');
+    let target = primary(target_lang);
+    if has(kana) {
+        return (target != "ja").then_some("ja");
+    }
+    if has(hangul) {
+        return (target != "ko").then_some("ko");
+    }
+    // 日文也用汉字，目标为日文时汉字不能说明认错了
+    if has(han) {
+        return (target != "zh" && target != "ja").then_some("zh");
+    }
+    None
+}
+
+/// 引擎原样返回、但原文含有目标语言用不到的文字的条目，指定原文语言重试一次（同一引擎）。
+/// 引擎不支持指定原文语言或重试失败时保留第一次的结果
+async fn retry_misdetected(engine: &dyn Translator, texts: &[String], out: &mut [String], target_lang: &str) {
+    let mut groups: HashMap<&'static str, Vec<usize>> = HashMap::new();
+    for (i, (src, tr)) in texts.iter().zip(out.iter()).enumerate() {
+        if src.trim() == tr.trim() {
+            if let Some(from) = misdetected_source(src, target_lang) {
+                groups.entry(from).or_default().push(i);
+            }
+        }
+    }
+    for (from, idx) in groups {
+        let batch: Vec<String> = idx.iter().map(|&i| texts[i].clone()).collect();
+        match engine.translate_batch_from(&batch, from, target_lang).await {
+            Ok(Some(v)) if v.len() == idx.len() => {
+                for (i, tr) in idx.into_iter().zip(v) {
+                    out[i] = tr;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("指定原文语言（{from}）重试失败，保留原结果：{e}"),
+        }
+    }
 }
 
 /// 大模型接口可用的模型 id（已排序去重）
@@ -487,6 +606,37 @@ mod tests {
         let ids = list_models(&cfg).await.unwrap();
         println!("{} 个模型，如 {:?}", ids.len(), &ids[..3.min(ids.len())]);
         assert!(!ids.is_empty());
+    }
+
+    #[test]
+    fn 推断被认错的原文语言() {
+        assert_eq!(misdetected_source("GitHub 提示: NOTE", "en"), Some("zh"));
+        assert_eq!(misdetected_source("上传 .pdf, .txt 等文件", "en-US"), Some("zh"));
+        assert_eq!(misdetected_source("Open ファイル", "en"), Some("ja"));
+        assert_eq!(misdetected_source("Save 저장", "zh-CN"), Some("ko"));
+        // 原文就是目标语言用的文字：引擎原样返回是正常的
+        assert_eq!(misdetected_source("GitHub 提示", "zh-CN"), None);
+        assert_eq!(misdetected_source("GitHub 設定", "ja"), None);
+        assert_eq!(misdetected_source("Claude", "en"), None);
+    }
+
+    /// 联网实测：中英混排的文字指定原文语言后能译出（自动识别时 Edge 会原样返回）
+    #[tokio::test]
+    #[ignore]
+    async fn 联网实测混排重试() {
+        let texts: Vec<String> = ["GitHub 提示: NOTE", "上传 .pdf, .txt, .md, .json 等文件", "Chinese (Simplified) 简体中文"]
+            .map(String::from)
+            .to_vec();
+        for id in ["edge", "bing"] {
+            let e = create(id, &ProviderConfig::default()).unwrap();
+            let mut out = e.translate_batch(&texts, "en").await.unwrap();
+            println!("{id} 自动识别：{out:?}");
+            retry_misdetected(e.as_ref(), &texts, &mut out, "en").await;
+            println!("{id} 重试后：{out:?}");
+            for (s, t) in texts.iter().zip(&out) {
+                assert!(misdetected_source(t, "en").is_none() || s != t, "{id} 仍原样返回：{s}");
+            }
+        }
     }
 
     /// 联网实测：cargo test -- --ignored --nocapture

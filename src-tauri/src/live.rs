@@ -18,6 +18,7 @@ use crate::layout::{self, Block};
 use crate::motion::{self, Frame};
 use crate::ocr;
 use crate::config::PortableWebview;
+use crate::timing::ms;
 use crate::translate;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -63,6 +64,8 @@ struct FrameCtl {
     dirty: AtomicBool,
     /// 检测到翻页键：立即唤醒跟踪循环
     wake: tokio::sync::Notify,
+    /// 后台 OCR / 翻译完成：立即唤醒跟踪循环推送结果，不必等到下一拍
+    ready: tokio::sync::Notify,
 }
 
 /// 推送给前端的版面
@@ -217,6 +220,8 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
         let n = frame_arrived.clone();
         Arc::new(move || n.notify_one())
     })));
+    // 耗时日志：本轮从画面变化起算，直到译文全部上屏
+    let mut round_start: Option<Instant> = None;
 
     loop {
         let tick = if last_change.elapsed() < IDLE_AFTER { FAST_TICK } else { IDLE_TICK };
@@ -225,6 +230,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             _ = tokio::time::sleep(tick) => {}
             _ = ctl.wake.notified() => last_change = Instant::now(),
             _ = frame_arrived.notified() => {}
+            _ = ctl.ready.notified() => {}
             w = wheel_rx.recv() => {
                 if let Ok(w) = w {
                     let mut delta = 0;
@@ -263,13 +269,16 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
         // 截屏 + 灰度化（阻塞操作放到线程池）
         let cap = capturer.clone();
         let shot = tauri::async_runtime::spawn_blocking(move || {
+            let t = Instant::now();
             cap.lock().unwrap().grab(rect.0, rect.1, rect.2, rect.3).map(|s| {
+                let cap_time = t.elapsed();
+                let t = Instant::now();
                 let frame = Frame::from_rgba(&s.image);
-                (s.image, frame, s.ox, s.oy, s.at)
+                (s.image, frame, s.ox, s.oy, s.at, cap_time, t.elapsed())
             })
         })
         .await;
-        let (image, frame, ox, oy, shot_at) = match shot {
+        let (image, frame, ox, oy, shot_at, cap_time, gray_time) = match shot {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 ocr_error = Some(e);
@@ -279,6 +288,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
         };
 
         let mut layout_changed = false;
+        let cmp_start = Instant::now();
         if rect_changed {
             // 移动/缩放：旧版面作废，坐标重新计起
             epoch += 1;
@@ -314,6 +324,10 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             let age = shot_at.elapsed().as_millis() as u32;
             let _ = app.emit_to(&label, "shift", ShiftPayload { epoch, total, age, sent: unix_ms() });
         }
+        let cmp_time = cmp_start.elapsed();
+        if ocr_stale && round_start.is_none() {
+            round_start = Some(shot_at);
+        }
 
         let mut s = shared.lock().unwrap();
 
@@ -340,8 +354,23 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             tauri::async_runtime::spawn_blocking(move || {
                 let cfg = config::load().unwrap_or_default();
                 let skip_cjk = cfg.target_lang.to_ascii_lowercase().starts_with("zh");
+                let t = Instant::now();
                 let result = ocr::recognize(&image, &cfg.ocr_lang, &cfg.target_lang).map(|out| {
+                    let ocr_time = t.elapsed();
+                    let t = Instant::now();
                     let mut blocks = layout::build_blocks(&out, &image, skip_cjk);
+                    tlog!(
+                        "悬浮窗 {}×{}：截屏 {} · 灰度化 {} · 画面比对 {} · OCR {}（{} 行）· 分段 {}（{} 段）",
+                        image.width(),
+                        image.height(),
+                        ms(cap_time),
+                        ms(gray_time),
+                        ms(cmp_time),
+                        ms(ocr_time),
+                        out.lines.len(),
+                        ms(t.elapsed()),
+                        blocks.len()
+                    );
                     // 截图可能因超出屏幕被裁过，换算回相对翻译框的坐标
                     for b in &mut blocks {
                         b.x += ox as f32;
@@ -357,6 +386,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
                     result,
                 });
                 ctl.dirty.store(true, Ordering::Relaxed);
+                ctl.ready.notify_one();
             });
         }
 
@@ -373,7 +403,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             let (shared, ctl) = (shared.clone(), ctl.clone());
             tauri::async_runtime::spawn(async move {
                 let cfg = config::load().unwrap_or_default();
-                let result = translate::translate_batch_with_fallback(&cfg, &missing).await;
+                let result = translate::translate_batch_with_fallback(&cfg, &missing, "悬浮窗").await;
                 let mut s = shared.lock().unwrap();
                 s.in_flight = false;
                 match result {
@@ -392,6 +422,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
                     }
                 }
                 ctl.dirty.store(true, Ordering::Relaxed);
+                ctl.ready.notify_one();
             });
         }
 
@@ -416,7 +447,17 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             error: ocr_error.clone().or_else(|| s.error.clone()),
             engine: s.engine.clone(),
         };
+        let settled = !ocr_stale && !s.ocr_busy && s.ocr_done.is_none() && !s.in_flight;
         drop(s);
+        if let Some(t) = round_start {
+            if payload.error.is_some() {
+                tlog!("悬浮窗 本轮出错，从画面变化起已过 {}", ms(t.elapsed()));
+                round_start = None;
+            } else if settled && payload.pending == 0 {
+                tlog!("悬浮窗 本轮 {} 段：画面变化 → 译文全部上屏 共 {}", payload.blocks.len(), ms(t.elapsed()));
+                round_start = None;
+            }
+        }
         let _ = app.emit_to(&label, "layout", payload);
     }
 
@@ -479,7 +520,7 @@ mod tests {
         println!("OCR + 分段耗时 {:?}，{} 行 → {} 段", t.elapsed(), out.lines.len(), blocks.len());
         let texts: Vec<String> = blocks.iter().map(|b| b.source.clone()).collect();
         let t = Instant::now();
-        let (tr, engine) = translate::translate_batch_with_fallback(&config::Config::default(), &texts)
+        let (tr, engine) = translate::translate_batch_with_fallback(&config::Config::default(), &texts, "测试")
             .await
             .unwrap();
         println!("批量翻译耗时 {:?}（{engine}）", t.elapsed());

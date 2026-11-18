@@ -108,7 +108,7 @@ pub fn immersive_set_show(app: AppHandle, port: Option<u16>, show: bool) {
 
 #[tauri::command]
 pub async fn immersive_launch(app: AppHandle, port: u16) -> Result<String, String> {
-    immersive::launch(&app, port).await
+    immersive::launch(&app, port, true).await
 }
 
 #[tauri::command]

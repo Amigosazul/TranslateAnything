@@ -32,6 +32,9 @@ const opened = new Set<string>();
 
 const blank = (): ProviderConfig => ({ base_url: "", api_key: "", region: "", model: "", proxy: null });
 
+/** DeepL 免费版地址（免费版密钥以 :fx 结尾） */
+const DEEPL_FREE = "https://api-free.deepl.com";
+
 function setParam(id: string, key: string, raw: string) {
   const v = raw.trim();
   return saveConfig((c) => {
@@ -109,15 +112,14 @@ const BASE_PRESETS: Record<string, [string, string][]> = {
     ["http://localhost:1234/v1", "@lmstudio"],
   ],
   microsoft: [
-    ["", "@msGlobal"],
+    ["https://api.cognitive.microsofttranslator.com", "@msGlobal"],
     ["https://api-apc.cognitive.microsofttranslator.com", "@msApc"],
     ["https://api-eur.cognitive.microsofttranslator.com", "@msEur"],
     ["https://api-nam.cognitive.microsofttranslator.com", "@msNam"],
     ["https://api.translator.azure.cn", "@msChina"],
   ],
   deepl: [
-    ["", "@deeplAuto"],
-    ["https://api-free.deepl.com", "@deeplFree"],
+    [DEEPL_FREE, "@deeplFree"],
     ["https://api.deepl.com", "@deeplPro"],
   ],
   deeplx: [["http://127.0.0.1:1188/translate", "@deeplxLocal"]],
@@ -129,8 +131,17 @@ function presetOptions(kind: string): DropOption<string>[] | null {
   return list.map(([value, label]) => ({
     value,
     label: label.startsWith("@") ? t(`engines.preset.${label.slice(1)}`) : label,
-    hint: value || t("engines.preset.defaultHint"),
+    hint: value,
   }));
+}
+
+/**
+ * 接口地址留空时实际使用的地址（与后端一致）：地址框直接显示它，用户能看到、复制、打开。
+ * 配置里仍存空值表示"跟随默认"，这样 DeepL 换了免费版 / 专业版的密钥也能自动跟着换
+ */
+function defaultBase(kind: string, p: ProviderConfig): string {
+  if (kind === "deepl" && p.api_key.trim().endsWith(":fx")) return DEEPL_FREE;
+  return engineInfo(kind)?.default_base_url ?? "";
 }
 
 /** 获取到的模型列表，按"地址 + 密钥 + 代理"缓存，界面重画后不必重新请求 */
@@ -230,10 +241,13 @@ export function paramFields(id: string, fields: string[], llm = false): HTMLElem
   for (const key of fields) {
     if (!FIELDS.has(key)) continue;
     const secret = SECRET.has(key);
-    const value = key === "proxy" ? p.proxy ?? "" : ((p as unknown as Record<string, string>)[key] ?? "");
+    const stored = key === "proxy" ? p.proxy ?? "" : ((p as unknown as Record<string, string>)[key] ?? "");
+    // 接口地址没填时显示默认地址；改回默认地址或清空都按"跟随默认"存空值
+    const def = key === "base_url" ? defaultBase(kind, p) : "";
+    const value = stored || def;
     const label = t(`engines.field.${key}.label`);
     const wide = key === "proxy" || key === "base_url" ? "wide" : "";
-    const save = (v: string) => void setParam(id, key, v);
+    const save = (v: string) => void setParam(id, key, def && v.trim() === def ? "" : v);
     if (key === "model") {
       grid.append(field(label, modelCombo(id, save), wide));
       continue;
@@ -260,7 +274,7 @@ export function paramFields(id: string, fields: string[], llm = false): HTMLElem
       autocomplete: "off",
       spellcheck: false,
     });
-    input.addEventListener("change", () => setParam(id, key, input.value));
+    input.addEventListener("change", () => save(input.value));
     let control: HTMLElement = input;
     if (secret) {
       const eye = h("button", { type: "button", class: "input-icon", title: t("engines.toggleSecret"), onclick: () => (input.type = input.type === "password" ? "text" : "password") }, icon("eye"));

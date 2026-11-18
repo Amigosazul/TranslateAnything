@@ -7,6 +7,10 @@ use crate::config::ProviderConfig;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+/// 免费版 / 付费版接口地址（未填地址时按 key 是否以 `:fx` 结尾选择）
+pub(crate) const FREE_BASE: &str = "https://api-free.deepl.com";
+pub(crate) const PRO_BASE: &str = "https://api.deepl.com";
+
 pub struct DeepL {
     client: reqwest::Client,
     url: String,
@@ -20,9 +24,9 @@ impl DeepL {
         let base = if !base.is_empty() {
             base.to_string()
         } else if key.ends_with(":fx") {
-            "https://api-free.deepl.com".into()
+            FREE_BASE.into()
         } else {
-            "https://api.deepl.com".into()
+            PRO_BASE.into()
         };
         Ok(Self {
             client: build_client(cfg)?,

@@ -40,8 +40,9 @@ impl Edge {
         })
     }
 
-    async fn edge(&self, texts: &[String], to: &str) -> Result<Vec<String>, TranslateError> {
-        let url = format!("{EDGE_URL}?from=&to={to}&isEnterpriseClient=false");
+    /// `from` 为空表示自动识别
+    async fn edge(&self, texts: &[String], from: &str, to: &str) -> Result<Vec<String>, TranslateError> {
+        let url = format!("{EDGE_URL}?from={from}&to={to}&isEnterpriseClient=false");
         let req = self
             .client
             .post(url)
@@ -60,7 +61,9 @@ impl Edge {
             .collect()
     }
 
-    async fn bing(&self, text: &str, to: &str) -> Result<String, TranslateError> {
+    /// `from` 为空表示自动识别
+    async fn bing(&self, text: &str, from: &str, to: &str) -> Result<String, TranslateError> {
+        let from = if from.is_empty() { "auto-detect" } else { from };
         // 缓存的 token 被判失效时重取一次
         for attempt in 0..2 {
             let token = self.bing_token(attempt > 0).await?;
@@ -69,7 +72,7 @@ impl Edge {
                 token.host, token.ig, token.iid
             );
             let body = form_encode(&[
-                ("fromLang", "auto-detect"),
+                ("fromLang", from),
                 ("to", to),
                 ("text", text),
                 ("token", &token.token),
@@ -185,29 +188,43 @@ impl Translator for Edge {
     }
 
     async fn translate_batch(&self, texts: &[String], target_lang: &str) -> Result<Vec<String>, TranslateError> {
+        self.batch(texts, "", target_lang).await
+    }
+
+    async fn translate_batch_from(
+        &self,
+        texts: &[String],
+        from: &str,
+        target_lang: &str,
+    ) -> Result<Option<Vec<String>>, TranslateError> {
+        self.batch(texts, &ms_lang(from), target_lang).await.map(Some)
+    }
+}
+
+impl Edge {
+    /// `from` 为微软语言代码，空 = 自动识别
+    async fn batch(&self, texts: &[String], from: &str, target_lang: &str) -> Result<Vec<String>, TranslateError> {
         let texts: Vec<String> = texts.iter().map(|t| merge_lines(t)).collect();
         let to = ms_lang(target_lang);
         if self.route == Route::EdgeThenBing {
-            match self.edge(&texts, &to).await {
+            match self.edge(&texts, from, &to).await {
                 Ok(v) if v.len() == texts.len() => return Ok(v),
                 Ok(_) => {}
                 Err(edge_err) => {
-                    return self.bing_all(&texts, &to).await.map_err(|bing_err| {
+                    return self.bing_all(&texts, from, &to).await.map_err(|bing_err| {
                         TranslateError::Api(t!("err.engine.edge_bing", edge = edge_err, bing = bing_err))
                     });
                 }
             }
         }
-        self.bing_all(&texts, &to).await
+        self.bing_all(&texts, from, &to).await
     }
-}
 
-impl Edge {
     /// Bing 网页接口一次只能翻一条
-    async fn bing_all(&self, texts: &[String], to: &str) -> Result<Vec<String>, TranslateError> {
+    async fn bing_all(&self, texts: &[String], from: &str, to: &str) -> Result<Vec<String>, TranslateError> {
         let mut out = Vec::with_capacity(texts.len());
         for t in texts {
-            out.push(self.bing(t, to).await?);
+            out.push(self.bing(t, from, to).await?);
         }
         Ok(out)
     }

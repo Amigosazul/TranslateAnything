@@ -98,6 +98,8 @@ pub struct ImmersiveTarget {
     pub url_prefixes: Vec<String>,
     /// 额外不翻译的元素（CSS 选择器），如聊天正文、代码区
     pub skip_selectors: Vec<String>,
+    /// 用户直接打开应用（没带调试端口）时，自动重启成沉浸模式
+    pub auto_relaunch: bool,
 }
 
 impl Default for ImmersiveTarget {
@@ -110,6 +112,7 @@ impl Default for ImmersiveTarget {
             port: 0,
             url_prefixes: Vec::new(),
             skip_selectors: Vec::new(),
+            auto_relaunch: true,
         }
     }
 }

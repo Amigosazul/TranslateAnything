@@ -30,17 +30,28 @@
     'code', 'pre', 'kbd', 'samp', 'var', 'svg', 'math', 'canvas',
   ]);
   const EDITABLE = new Set(['', 'true', 'plaintext-only']);
-  const CUSTOM_SKIP = (CFG.skipSelectors || []).join(',');
+  // 声明不翻译的元素。写在 <html> / <body> 上的不算：很多应用（如 Apifox）在根节点写 translate="no"
+  // 只是为了不让浏览器弹自带的翻译提示，照它跳过就整页都不翻了；用户装随译就是要翻它
+  const NO_TRANSLATE = [':not(html):not(body)[translate="no"]', ':not(html):not(body).notranslate'];
+  // 内置跳过：代码编辑器和终端的正文。它们不用 contenteditable，按标签认不出来，翻了等于改用户的代码
+  const BUILTIN_SKIP = [
+    '.monaco-editor .view-lines', // VS Code 及其衍生（Trae、Cursor 等）、Monaco
+    '.xterm-rows', '.xterm-accessibility', // xterm.js 终端
+    '.CodeMirror-code', // CodeMirror 5（CodeMirror 6 是 contenteditable，已跳过）
+    '.ace_text-layer', // Ace
+  ];
+  const CUSTOM_SKIP = [...BUILTIN_SKIP, ...(CFG.skipSelectors || [])].join(',');
   const SKIP = [
     ...SKIP_TAGS,
     '[contenteditable=""]', '[contenteditable="true"]', '[contenteditable="plaintext-only"]',
-    '[translate="no"]', '.notranslate',
+    ...NO_TRANSLATE,
+    ...BUILTIN_SKIP,
     ...(CFG.skipSelectors || []),
   ].join(',');
   // 属性的跳过范围宽一些：输入框的 placeholder 要翻，但可编辑区和声明不翻译的不碰
   const ATTR_SKIP = [
     '[contenteditable=""]', '[contenteditable="true"]', '[contenteditable="plaintext-only"]',
-    '[translate="no"]', '.notranslate',
+    ...NO_TRANSLATE,
     ...(CFG.skipSelectors || []),
   ].join(',');
   const ATTRS = ['placeholder', 'title'];
@@ -71,11 +82,19 @@
     if (t.length < 2 || t.length > 5000) return false;
     const letters = (t.match(LETTER) || []).length;
     if (letters < 2) return false;
-    if (CFG.skipCjk && (t.match(CJK) || []).length * 2 >= letters) return false;
+    const cjk = (t.match(CJK) || []).length;
+    if (CFG.skipCjk && cjk * 2 >= letters) return false;
     // 单个"词"且像路径、文件名、版本号、变量名的不翻
-    if (!/\s/.test(t) && /[\/\\._:@#=<>{}\[\]$|]|\d|[a-z][A-Z]/.test(t)) return false;
-    // 带版本号的短名字（"Opus 5.5"、"Node 22"）多是产品/型号名，翻了反而错
-    if (t.split(/\s+/).length <= 3 && /\d/.test(t)) return false;
+    if (!/\s/.test(t)) {
+      // 中日文不用空格分词，整句都是一个"词"：句末的"…"、"："、数字不能当成标识符的证据，
+      // 只认明显的路径、文件扩展名（"海鸥3.0.md"、"C:\文档"）；句中的驼峰多是产品名（"VibCode分支原型：…"），不算
+      if (cjk ? /[\/\\@#=<>{}\[\]$|]|\.[A-Za-z0-9]{1,6}$/.test(t) : /[\/\\._:@#=<>{}\[\]$|]|\d|[a-z][A-Z]/.test(t)) {
+        return false;
+      }
+    }
+    // 带版本号的短名字（"Opus 5.5"、"Node 22"）多是产品/型号名，翻了反而错；
+    // 中日文按空格数词没有意义（"空格: 4"、"第 1 页"），不用这条
+    if (!cjk && t.split(/\s+/).length <= 3 && /\d/.test(t)) return false;
     return true;
   }
 
@@ -100,7 +119,8 @@
     if (SKIP_TAGS.has(el.localName)) return true;
     const ce = el.getAttribute('contenteditable');
     if (ce !== null && EDITABLE.has(ce)) return true;
-    if (el.getAttribute('translate') === 'no' || el.classList.contains('notranslate')) return true;
+    const root = el === document.documentElement || el === document.body;
+    if (!root && (el.getAttribute('translate') === 'no' || el.classList.contains('notranslate'))) return true;
     return CUSTOM_SKIP !== '' && el.matches(CUSTOM_SKIP);
   }
 

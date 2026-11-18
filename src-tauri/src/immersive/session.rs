@@ -52,7 +52,14 @@ pub fn wanted(t: &TargetInfo, target: &ImmersiveTarget) -> bool {
     if !matches!(t.kind.as_str(), "page" | "iframe" | "webview") || t.ws.is_empty() {
         return false;
     }
-    if t.url.starts_with("devtools://") || t.url.starts_with("chrome") || t.url == "about:blank" {
+    // 地址为空的多是还没导航的隐藏窗口（实测 Apifox 有两个），连上去 Runtime.enable 也不响应
+    // edge:// 是 WebView2 的内部页面
+    if t.url.is_empty()
+        || t.url.starts_with("devtools://")
+        || t.url.starts_with("chrome")
+        || t.url.starts_with("edge://")
+        || t.url == "about:blank"
+    {
         return false;
     }
     target.url_prefixes.is_empty() || target.url_prefixes.iter().any(|p| t.url.starts_with(p.as_str()))
@@ -229,7 +236,8 @@ async fn answer(cdp: cdp::Cdp, ctx_id: i64, payload: String, app: AppHandle, sta
             return;
         }
     };
-    let expr = match translate::translate_batch_with_fallback(&cfg, &texts).await {
+    let start = std::time::Instant::now();
+    let expr = match translate::translate_batch_with_fallback(&cfg, &texts, "沉浸模式").await {
         Ok((translated, engine)) => {
             {
                 let mut s = status.lock().unwrap();
@@ -248,5 +256,13 @@ async fn answer(cdp: cdp::Cdp, ctx_id: i64, payload: String, app: AppHandle, sta
             format!("globalThis.__tf && __tf.failed({})", json!({ "texts": texts }))
         }
     };
+    let translated_at = start.elapsed();
     let _ = eval(&cdp, ctx_id, &expr).await;
+    tlog!(
+        "沉浸模式 本批 {} 条：翻译 {} · 回填页面 {} · 共 {}",
+        texts.len(),
+        crate::timing::ms(translated_at),
+        crate::timing::ms(start.elapsed() - translated_at),
+        crate::timing::ms(start.elapsed())
+    );
 }
