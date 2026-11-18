@@ -1,6 +1,6 @@
 //! 沉浸模式：直接改写目标应用界面里的文字，而不是在上面盖一层浮窗。
 //!
-//! 第一个通道面向 Electron / Chromium 内核应用（reclaude 客户端、VS Code 等）：
+//! 第一个通道面向 Electron / Chromium 内核应用（Claude 客户端、VS Code 等）：
 //! 应用带 `--remote-debugging-port=<端口>` 启动后，本模块通过 Chrome DevTools Protocol
 //! 连上它的每个页面，往隔离环境里注入 `inject.js`，由脚本在 DOM 里原地替换文字。
 //! 软件本体（exe、asar）一个字节都不改，停用或退出随译即恢复原文。

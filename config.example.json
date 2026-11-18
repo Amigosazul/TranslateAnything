@@ -16,9 +16,9 @@
     "hotkey": "Alt+Shift+T",
     "targets": [
       {
-        "name": "reclaude 客户端",
+        "name": "Claude 客户端",
         "enabled": true,
-        "exe": "C:\\Users\\你的用户名\\.rec\\claude-app\\app\\claude.exe",
+        "exe": "C:\\Users\\你的用户名\\AppData\\Local\\AnthropicClaude\\app-版本号\\claude.exe",
         "args": "",
         "port": 39222,
         "url_prefixes": [],

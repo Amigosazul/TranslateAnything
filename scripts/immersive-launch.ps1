@@ -1,15 +1,15 @@
 ﻿<#
 .SYNOPSIS
-  以沉浸模式（带远程调试端口）重新打开一个 Electron 应用，默认是 reclaude 客户端。
+  以沉浸模式（带远程调试端口）重新打开一个 Electron 应用，默认是 Claude 客户端。
 
 .DESCRIPTION
-  沉浸模式需要目标应用带 --remote-debugging-port 启动。reclaude 启动客户端时会带一组自己的参数
-  （代理、用户数据目录等），所以本脚本不自己拼参数，而是：
+  沉浸模式需要目标应用带 --remote-debugging-port 启动。应用可能由快捷方式或启动器带着一组自己的参数
+  （代理、用户数据目录等）打开，所以本脚本不自己拼参数，而是：
     1. 读取正在运行的客户端主进程的完整命令行，保存到 ~/.translate-anything/launch-<名称>.txt；
     2. 等你从托盘菜单把客户端完全退出；
     3. 用同样的命令行 + --remote-debugging-port=<端口> 重新打开。
   客户端没在运行时，直接用上次保存的命令行启动。
-  软件本体不做任何修改；想回到普通模式，退出后照常用 reclaude 打开即可。
+  软件本体不做任何修改；想回到普通模式，退出后照常打开即可。
 
   注意：调试端口只监听本机 127.0.0.1，但本机任何程序都能通过它操控该应用，用完建议照常重启。
 
@@ -18,8 +18,10 @@
   pwsh -File scripts/immersive-launch.ps1 -Exe "C:\path\to\App.exe" -Name myapp -Port 39223
 #>
 param(
-  [string]$Exe = (Join-Path $env:USERPROFILE '.rec\claude-app\app\claude.exe'),
-  [string]$Name = 'reclaude',
+  # 默认取 Claude 客户端最新版本目录里的主程序（根目录的 claude.exe 只是更新器的启动壳）
+  [string]$Exe = (Get-ChildItem (Join-Path $env:LOCALAPPDATA 'AnthropicClaude\app-*\claude.exe') -ErrorAction SilentlyContinue |
+    Sort-Object { [version]($_.Directory.Name -replace '^app-', '') } | Select-Object -Last 1 -ExpandProperty FullName),
+  [string]$Name = 'claude',
   [int]$Port = 39222,
   [int]$WaitSeconds = 300
 )
@@ -49,7 +51,7 @@ function Test-Port {
   } catch { return $false }
 }
 
-if (-not (Test-Path $Exe)) { throw "找不到程序：$Exe" }
+if (-not $Exe -or -not (Test-Path $Exe)) { throw "找不到程序：$Exe（可用 -Exe 指定）" }
 
 if (Test-Port) {
   Write-Host "调试端口 $Port 已开启，应用已处于沉浸模式，无需重启。"
@@ -70,7 +72,7 @@ if ($main) {
   # 等子进程收尾，避免单实例锁还没释放
   Start-Sleep -Seconds 2
 } elseif (-not (Test-Path $saveFile)) {
-  throw "应用没有在运行，也没有保存过启动参数。请先用平常的方式（如 reclaude app）打开一次，再运行本脚本。"
+  throw "应用没有在运行，也没有保存过启动参数。请先用平常的方式（开始菜单、快捷方式等）打开一次，再运行本脚本。"
 }
 
 # 拆出参数部分：去掉开头的程序路径（可能带引号），并去掉旧的调试端口参数

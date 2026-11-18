@@ -16,14 +16,14 @@
       enabled: true,
       hotkey: "Alt+Shift+T",
       targets: [
-        { name: "reclaude", enabled: true, exe: "C:\\Users\\Demo\\AppData\\Local\\AnthropicClaude\\claude.exe", args: "", port: 39222, url_prefixes: ["https://claude.ai/"], skip_selectors: [".chat-message"] },
+        { name: "Claude", enabled: true, exe: "C:\\Users\\Demo\\AppData\\Local\\AnthropicClaude\\claude.exe", args: "", port: 39222, url_prefixes: ["https://claude.ai/"], skip_selectors: [".chat-message"] },
         { name: "Visual Studio Code", enabled: true, exe: "C:\\Program Files\\Microsoft VS Code\\Code.exe", args: "", port: 39223, url_prefixes: [], skip_selectors: [] },
         { name: "Notion", enabled: false, exe: "", args: "", port: 39224, url_prefixes: [], skip_selectors: [] },
       ],
     },
   };
   const statuses = [
-    { port: 39222, name: "reclaude", enabled: true, state: "attached", message: "", pages: [{ id: "1", url: "https://claude.ai/new", title: "Claude" }, { id: "2", url: "https://claude.ai/code", title: "Claude Code" }], show: true, translated: 1284, engine_batches: 37 },
+    { port: 39222, name: "Claude", enabled: true, state: "attached", message: "", pages: [{ id: "1", url: "https://claude.ai/new", title: "Claude" }, { id: "2", url: "https://claude.ai/code", title: "Claude Code" }], show: true, translated: 1284, engine_batches: 37 },
     { port: 39223, name: "Visual Studio Code", enabled: true, state: "no_port", message: "程序正在运行，但没有带调试端口启动。点「以沉浸模式重启」即可。", pages: [], show: false, translated: 0, engine_batches: 0 },
     { port: 39224, name: "Notion", enabled: false, state: "disabled", message: "", pages: [], show: false, translated: 0, engine_batches: 0 },
   ];
@@ -54,7 +54,7 @@
     reveal_file: () => null,
     settings_save: (a) => { Object.assign(config, JSON.parse(JSON.stringify(a.config))); },
     immersive_status: () => statuses,
-    immersive_detect: () => [{ name: "Slack", exe: "C:\\Users\\Demo\\AppData\\Local\\slack\\slack.exe", port: null, configured: false }, { name: "reclaude", exe: "C:\\...\\claude.exe", port: 39222, configured: true }],
+    immersive_detect: () => [{ name: "Slack", exe: "C:\\Users\\Demo\\AppData\\Local\\slack\\slack.exe", port: null, configured: false }, { name: "Claude", exe: "C:\\...\\claude.exe", port: 39222, configured: true }],
     store_query: (a) => { const k = (a.keyword || "").toLowerCase(); const r = rows.filter((x) => (!a.manualOnly || x.manual) && (!k || x.source.toLowerCase().includes(k) || x.target.includes(k))); return { total: r.length, rows: r }; },
     store_set: () => null, store_delete: () => null, store_clear: () => 0,
     immersive_set_show: () => null, immersive_set_enabled: () => null, immersive_launch: () => "已发送",

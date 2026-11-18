@@ -110,14 +110,8 @@ impl Default for ImmersiveConfig {
         Self {
             enabled: true,
             hotkey: "Alt+Shift+T".into(),
-            targets: vec![ImmersiveTarget {
-                name: "reclaude 客户端".into(),
-                exe: dirs::home_dir()
-                    .map(|h| h.join(".rec").join("claude-app").join("app").join("claude.exe").to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                port: 39222,
-                ..Default::default()
-            }],
+            // 默认不预置任何应用，由用户在设置窗口里检测或手动添加
+            targets: Vec::new(),
         }
     }
 }
@@ -282,8 +276,11 @@ mod tests {
     #[test]
     fn 校验端口重复() {
         let mut cfg = Config::default();
+        assert!(cfg.immersive.targets.is_empty(), "默认不预置应用");
+        let t = ImmersiveTarget { name: "a".into(), port: 39222, ..Default::default() };
+        cfg.immersive.targets.push(t.clone());
         assert!(validate(&cfg).is_ok());
-        let mut t = cfg.immersive.targets[0].clone();
+        let mut t = t;
         t.name = "另一个".into();
         cfg.immersive.targets.push(t);
         assert!(validate(&cfg).unwrap_err().contains("重复"));
