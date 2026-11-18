@@ -46,13 +46,16 @@ window.addEventListener("mousedown", (e) => {
 window.addEventListener("mousemove", (e) => {
   if (!start) return;
   const r = rectFrom(e.clientX, e.clientY);
-  Object.assign(selection.style, {
-    left: `${r.left}px`,
-    top: `${r.top}px`,
-    width: `${r.width}px`,
-    height: `${r.height}px`,
-  });
   const dpr = window.devicePixelRatio;
+  // 对齐到物理像素，与松开后翻译框（同一取整）的边框位置、线宽一致
+  const snap = (v: number) => `${Math.round(v * dpr) / dpr}px`;
+  Object.assign(selection.style, {
+    left: snap(r.left),
+    top: snap(r.top),
+    width: snap(r.width),
+    height: snap(r.height),
+    borderWidth: `${2 / dpr}px`,
+  });
   sizeTip.textContent = `${Math.round(r.width * dpr)} × ${Math.round(r.height * dpr)}`;
   Object.assign(sizeTip.style, {
     left: `${r.left}px`,

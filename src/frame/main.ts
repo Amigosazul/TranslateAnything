@@ -206,6 +206,27 @@ initI18n().then(() => {
   if (lastLayout) updateStatus(lastLayout);
 });
 
+/** 边框线宽（物理像素），与框选遮罩的选区边框一致 */
+const BORDER_PX = 2;
+const borderEl = document.getElementById("border")!;
+
+/**
+ * 边框按窗口的物理像素尺寸对齐。窗口尺寸来自框选的物理像素，缩放 125%/150% 时
+ * 换算成 CSS 像素是小数，原先 inset:0 + 1px 线宽在右/下边落到不足一个物理像素时会被裁掉。
+ */
+function fitBorder(w: number, h: number) {
+  const dpr = window.devicePixelRatio;
+  Object.assign(borderEl.style, {
+    // 取窗口客户区与网页视口中较小者：WebView 实际尺寸可能比客户区多出一两个像素被裁
+    width: `min(100%, ${w / dpr}px)`,
+    height: `min(100%, ${h / dpr}px)`,
+    borderWidth: `${BORDER_PX / dpr}px`,
+  });
+}
+win.innerSize().then((s) => fitBorder(s.width, s.height));
+win.onResized((e) => fitBorder(e.payload.width, e.payload.height));
+win.onScaleChanged((e) => fitBorder(e.payload.size.width, e.payload.size.height));
+
 // 首帧（边框）画出后通知后端关闭框选遮罩，避免松开鼠标时选区先消失、翻译框后出现
 requestAnimationFrame(() => requestAnimationFrame(() => invoke("frame_ready")));
 
