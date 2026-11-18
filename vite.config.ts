@@ -25,12 +25,12 @@ export default defineConfig(() => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-  // 多页面：遮罩页、浮窗页（设置页 M3 再加）
+  // 多页面：框选遮罩页、翻译框页（设置页 M3 再加）
   build: {
     rollupOptions: {
       input: {
         overlay: "overlay.html",
-        panel: "panel.html",
+        frame: "frame.html",
       },
     },
   },

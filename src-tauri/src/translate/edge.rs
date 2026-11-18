@@ -40,15 +40,24 @@ impl Edge {
         })
     }
 
-    async fn edge(&self, text: &str, to: &str) -> Result<String, TranslateError> {
+    async fn edge(&self, texts: &[String], to: &str) -> Result<Vec<String>, TranslateError> {
         let url = format!("{EDGE_URL}?from=&to={to}&isEnterpriseClient=false");
         let req = self
             .client
             .post(url)
             .header("User-Agent", BROWSER_UA)
-            .json(&json!([text]));
+            .json(&json!(texts));
         let v = send_json(req, "/error/message").await?;
-        join_translations(&v)
+        let items = v.as_array().ok_or_else(|| parse_err(&v))?;
+        items
+            .iter()
+            .map(|item| {
+                item.pointer("/translations/0/text")
+                    .and_then(Value::as_str)
+                    .map(|s| s.trim().to_string())
+                    .ok_or_else(|| parse_err(&v))
+            })
+            .collect()
     }
 
     async fn bing(&self, text: &str, to: &str) -> Result<String, TranslateError> {
@@ -171,17 +180,36 @@ fn join_translations(v: &Value) -> Result<String, TranslateError> {
 #[async_trait]
 impl Translator for Edge {
     async fn translate(&self, text: &str, target_lang: &str) -> Result<String, TranslateError> {
-        let text = merge_lines(text);
+        let mut v = self.translate_batch(&[text.to_string()], target_lang).await?;
+        Ok(v.pop().unwrap_or_default())
+    }
+
+    async fn translate_batch(&self, texts: &[String], target_lang: &str) -> Result<Vec<String>, TranslateError> {
+        let texts: Vec<String> = texts.iter().map(|t| merge_lines(t)).collect();
         let to = ms_lang(target_lang);
-        if self.route == Route::BingOnly {
-            return self.bing(&text, &to).await;
+        if self.route == Route::EdgeThenBing {
+            match self.edge(&texts, &to).await {
+                Ok(v) if v.len() == texts.len() => return Ok(v),
+                Ok(_) => {}
+                Err(edge_err) => {
+                    return self.bing_all(&texts, &to).await.map_err(|bing_err| {
+                        TranslateError::Api(format!("Edge 接口：{edge_err}；Bing 网页回退：{bing_err}"))
+                    });
+                }
+            }
         }
-        match self.edge(&text, &to).await {
-            Ok(t) => Ok(t),
-            Err(edge_err) => self.bing(&text, &to).await.map_err(|bing_err| {
-                TranslateError::Api(format!("Edge 接口：{edge_err}；Bing 网页回退：{bing_err}"))
-            }),
+        self.bing_all(&texts, &to).await
+    }
+}
+
+impl Edge {
+    /// Bing 网页接口一次只能翻一条
+    async fn bing_all(&self, texts: &[String], to: &str) -> Result<Vec<String>, TranslateError> {
+        let mut out = Vec::with_capacity(texts.len());
+        for t in texts {
+            out.push(self.bing(t, to).await?);
         }
+        Ok(out)
     }
 }
 

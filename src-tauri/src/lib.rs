@@ -1,6 +1,9 @@
 mod capture;
 mod commands;
 mod config;
+mod layout;
+mod live;
+mod motion;
 mod ocr;
 mod translate;
 
@@ -11,12 +14,13 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(commands::AppState::default())
+        .manage(live::LiveState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
                         let app = app.clone();
-                        // 截屏 + 建窗口放到后台线程，不阻塞主线程
+                        // 建窗口放到后台线程，不阻塞主线程
                         tauri::async_runtime::spawn_blocking(move || {
                             if let Err(e) = commands::open_overlay(&app) {
                                 eprintln!("打开框选遮罩失败：{e}");
@@ -43,8 +47,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::select_done,
             commands::select_cancel,
-            commands::translate_panel,
             commands::engine_catalog,
+            live::frame_set_paused,
         ])
         .build(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

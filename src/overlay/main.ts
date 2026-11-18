@@ -1,7 +1,6 @@
 // 框选遮罩：画选区矩形，松开鼠标后把选区（物理像素、相对本显示器左上角）回传给后端
 import { invoke } from "@tauri-apps/api/core";
 
-const mask = document.getElementById("mask")!;
 const selection = document.getElementById("selection")!;
 const sizeTip = document.getElementById("size-tip")!;
 const hint = document.getElementById("hint")!;
@@ -35,7 +34,6 @@ window.addEventListener("mousedown", (e) => {
   }
   if (e.button !== 0 || finished) return;
   start = { x: e.clientX, y: e.clientY };
-  mask.hidden = true;
   hint.hidden = true;
   selection.hidden = false;
   sizeTip.hidden = false;
@@ -66,7 +64,6 @@ window.addEventListener("mouseup", (e) => {
     // 误点：恢复初始状态，允许重新框选
     selection.hidden = true;
     sizeTip.hidden = true;
-    mask.hidden = false;
     hint.hidden = false;
     return;
   }

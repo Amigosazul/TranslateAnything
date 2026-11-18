@@ -10,14 +10,37 @@ use windows::Storage::Streams::DataWriter;
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows::core::HSTRING;
 
-/// 文字高度太小时 OCR 识别率很差，选区高度低于该值（物理像素）先放大
+/// 文字高度太小时 OCR 识别率很差，图像高度低于该值（物理像素）先放大
 const UPSCALE_BELOW: u32 = 48;
 
-/// 识别图像中的文字，按行用 `\n` 连接
+/// 一个识别出的单词，坐标为原图物理像素
+#[derive(Debug, Clone)]
+pub struct Word {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// 一行文字
+#[derive(Debug, Clone)]
+pub struct Line {
+    pub words: Vec<Word>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OcrOutput {
+    pub lines: Vec<Line>,
+    /// 识别语言是否为中日文（拼接单词时不加空格）
+    pub cjk: bool,
+}
+
+/// 识别图像中的文字（含位置）
 ///
 /// - `lang_pref`：`auto` 或空 = 自动挑选；否则为语言标签，如 `en-US`
 /// - `target_lang`：翻译目标语言，自动模式下优先选一个与之不同的 OCR 语言
-pub fn recognize(image: RgbaImage, lang_pref: &str, target_lang: &str) -> Result<String, String> {
+pub fn recognize(image: &RgbaImage, lang_pref: &str, target_lang: &str) -> Result<OcrOutput, String> {
     // 当前线程可能还没初始化 WinRT；重复初始化返回的错误可以忽略
     unsafe {
         let _ = RoInitialize(RO_INIT_MULTITHREADED);
@@ -26,16 +49,16 @@ pub fn recognize(image: RgbaImage, lang_pref: &str, target_lang: &str) -> Result
 }
 
 fn recognize_inner(
-    image: RgbaImage,
+    image: &RgbaImage,
     lang_pref: &str,
     target_lang: &str,
-) -> windows::core::Result<String> {
+) -> windows::core::Result<OcrOutput> {
     let (engine, tag) = create_engine(lang_pref, target_lang)?;
-    let image = fit_size(image, OcrEngine::MaxImageDimension()?);
-    let (w, h) = image.dimensions();
+    let (scaled, scale) = fit_size(image, OcrEngine::MaxImageDimension()?);
+    let (w, h) = scaled.dimensions();
 
     // RGBA → BGRA
-    let mut bytes = image.into_raw();
+    let mut bytes = scaled.into_raw();
     for px in bytes.chunks_exact_mut(4) {
         px.swap(0, 2);
     }
@@ -51,23 +74,27 @@ fn recognize_inner(
     )?;
 
     let result = engine.RecognizeAsync(&bitmap)?.join()?;
-    let cjk = is_cjk_lang(&tag);
     let mut lines = Vec::new();
     for line in result.Lines()? {
-        let mut text = String::new();
+        let mut words = Vec::new();
         for word in line.Words()? {
-            let w = word.Text()?.to_string_lossy();
-            // 中日文引擎会在每个字之间插空格，这里去掉 CJK 字符之间的空格
-            let need_space = !text.is_empty()
-                && !(cjk && ends_with_wide(&text) && starts_with_wide(&w));
-            if need_space {
-                text.push(' ');
-            }
-            text.push_str(&w);
+            let r = word.BoundingRect()?;
+            words.push(Word {
+                text: word.Text()?.to_string_lossy(),
+                x: r.X / scale,
+                y: r.Y / scale,
+                w: r.Width / scale,
+                h: r.Height / scale,
+            });
         }
-        lines.push(text);
+        if !words.is_empty() {
+            lines.push(Line { words });
+        }
     }
-    Ok(lines.join("\n"))
+    Ok(OcrOutput {
+        lines,
+        cjk: is_cjk_lang(&tag),
+    })
 }
 
 /// 选 OCR 引擎，返回（引擎，语言标签）
@@ -98,38 +125,26 @@ fn create_engine(lang_pref: &str, target_lang: &str) -> windows::core::Result<(O
     Ok((engine, tag))
 }
 
-/// 太大则缩小到 OCR 上限内，太小则放大以提高识别率
-fn fit_size(image: RgbaImage, max_dim: u32) -> RgbaImage {
+/// 太大则缩小到 OCR 上限内，太小则放大以提高识别率；返回（图像，缩放倍数）
+fn fit_size(image: &RgbaImage, max_dim: u32) -> (RgbaImage, f32) {
     use image::imageops::{FilterType, resize};
     let (w, h) = image.dimensions();
     let longest = w.max(h);
     if longest > max_dim {
-        let s = max_dim as f64 / longest as f64;
-        let (nw, nh) = (((w as f64 * s) as u32).max(1), ((h as f64 * s) as u32).max(1));
-        return resize(&image, nw, nh, FilterType::Triangle);
+        let s = max_dim as f32 / longest as f32;
+        let (nw, nh) = (((w as f32 * s) as u32).max(1), ((h as f32 * s) as u32).max(1));
+        return (resize(image, nw, nh, FilterType::Triangle), nw as f32 / w as f32);
     }
     if h < UPSCALE_BELOW {
-        let s = ((UPSCALE_BELOW as f64 / h as f64).ceil() as u32).min(4);
+        let s = (UPSCALE_BELOW.div_ceil(h.max(1))).min(4);
         if longest * s <= max_dim {
-            return resize(&image, w * s, h * s, FilterType::CatmullRom);
+            return (resize(image, w * s, h * s, FilterType::CatmullRom), s as f32);
         }
     }
-    image
+    (image.clone(), 1.0)
 }
 
 fn is_cjk_lang(tag: &str) -> bool {
     let t = tag.to_ascii_lowercase();
     t.starts_with("zh") || t.starts_with("ja")
-}
-
-fn is_wide(c: char) -> bool {
-    !c.is_ascii()
-}
-
-fn ends_with_wide(s: &str) -> bool {
-    s.chars().last().is_some_and(is_wide)
-}
-
-fn starts_with_wide(s: &str) -> bool {
-    s.chars().next().is_some_and(is_wide)
 }

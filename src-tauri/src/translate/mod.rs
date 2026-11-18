@@ -40,6 +40,16 @@ impl fmt::Display for TranslateError {
 #[async_trait]
 pub trait Translator: Send + Sync {
     async fn translate(&self, text: &str, target_lang: &str) -> Result<String, TranslateError>;
+
+    /// 批量翻译；默认逐条调用，支持批量的接口应覆盖以减少请求次数
+    async fn translate_batch(&self, texts: &[String], target_lang: &str) -> Result<Vec<String>, TranslateError> {
+        let mut out = Vec::with_capacity(texts.len());
+        for t in texts {
+            out.push(self.translate(t, target_lang).await?);
+        }
+        Ok(out)
+    }
+
     // 扩展点（P2 视觉直译）：translate_image(&self, png: &[u8], target_lang)，默认返回"不支持"
 }
 
@@ -152,21 +162,23 @@ fn engine_name(kind: &str) -> &str {
     CATALOG.iter().find(|e| e.id == kind).map_or(kind, |e| e.name)
 }
 
-/// 按配置的主引擎 + 回退顺序依次尝试，返回（译文，实际使用的引擎名）
-pub async fn translate_with_fallback(cfg: &Config, text: &str) -> Result<(String, String), String> {
+/// 按配置的主引擎 + 回退顺序依次尝试批量翻译，返回（译文，实际使用的引擎名）
+pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Result<(Vec<String>, String), String> {
     let mut errors = Vec::new();
     for (id, provider) in cfg.engine_chain() {
         let kind = provider.kind_or(&id);
         let result = match create(&kind, &provider) {
-            Ok(t) => t.translate(text, &cfg.target_lang).await,
+            Ok(t) => t.translate_batch(texts, &cfg.target_lang).await,
             Err(e) => Err(e),
         };
         match result {
-            Ok(t) => return Ok((t, engine_name(&kind).to_string())),
+            Ok(t) if t.len() == texts.len() => return Ok((t, engine_name(&kind).to_string())),
+            Ok(_) => errors.push(format!("【{}】返回的译文条数与原文不一致", engine_name(&kind))),
             Err(e) => errors.push(format!("【{}】{e}", engine_name(&kind))),
         }
     }
-    Err(errors.join("\n"))
+    Err(errors.join("
+"))
 }
 
 // ───────────────────────── 公共工具 ─────────────────────────
