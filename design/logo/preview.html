@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>随译 Logo 定稿</title>
+<style>
+  :root { --page: #f4f6fa; --card: #ffffff; --ink: #14172b; --sub: #6b7085; --line: #e6e9f0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.6 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 36px 24px 60px; }
+  h1 { font-size: 24px; font-weight: 650; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  p.sub { margin: 0 0 24px; color: var(--sub); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 22px; margin-bottom: 18px; }
+  .row { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  figure { margin: 0; text-align: center; color: var(--sub); font-size: 11px; }
+  figure img { display: block; margin: 0 auto 6px; }
+  .hero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .hero > div { height: 240px; border-radius: 14px; display: grid; place-items: center; }
+  .hero img { filter: drop-shadow(0 8px 16px rgba(30, 60, 140, .14)); }
+  .soft { background: #e9edf5; } .white { background: #fff; border: 1px solid var(--line); }
+  .bar { height: 48px; border-radius: 10px; display: flex; align-items: center; gap: 16px; padding: 0 16px; margin-top: 10px; font-size: 12px; }
+  .bar.dark { background: #202024; color: #fff; } .bar.light { background: #eef0f4; color: #111; }
+  .bar span { width: 70px; opacity: .7; }
+  .lockup { display: flex; align-items: center; gap: 16px; }
+  .lockup .cn { font-size: 30px; font-weight: 700; letter-spacing: 3px; line-height: 1.2; }
+  .lockup .en { font-size: 18px; color: var(--sub); font-weight: 500; }
+  @media (max-width: 800px) { .hero { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>随译 TranslateAnything · Logo 定稿</h1>
+  <p class="sub">"文中藏 A" + 扫描线：线下灰色是原文 "A"，线上蓝色是已经改写好的 "文"。源文件由 build.mjs 生成。</p>
+
+  <section>
+    <h2>应用图标（icon.svg）与亮色底备用版（icon-bright.svg）</h2>
+    <div class="hero">
+      <div class="soft"><img src="icon.svg" width="180"></div>
+      <div class="white"><img src="icon.svg" width="180"></div>
+      <div class="soft"><img src="icon-bright.svg" width="180"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>实际尺寸（48px 及以上用 icon.svg，40px 及以下用加粗版 icon-small.svg）</h2>
+    <div class="row" id="sizes"></div>
+    <h2 style="margin-top:18px">小尺寸对比：上排原版直接缩小，下排加粗版</h2>
+    <div class="row" id="cmpOld"></div>
+    <div class="row" id="cmpNew" style="margin-top:10px"></div>
+    <div class="bar light" style="justify-content:flex-start"><span>浅色任务栏</span><div class="row" id="cmpBar"></div></div>
+  </section>
+
+  <section>
+    <h2>托盘图标（tray.svg，透明底、笔画加粗）</h2>
+    <div class="bar dark"><span>深色任务栏</span><div class="row" id="trayDark"></div></div>
+    <div class="bar light"><span>浅色任务栏</span><div class="row" id="trayLight"></div></div>
+  </section>
+
+  <section>
+    <h2>与文字组合（mark.svg）</h2>
+    <div class="lockup"><img src="mark.svg" width="64"><div><div class="cn">随译</div><div class="en">TranslateAnything</div></div></div>
+  </section>
+</div>
+<script>
+  const pick = s => s <= 40 ? 'icon-small.svg' : 'icon.svg';
+  document.getElementById('sizes').innerHTML =
+    [128, 64, 48, 32, 24, 16].map(s => `<figure><img src="${pick(s)}" width="${s}">${s}px</figure>`).join('');
+  const cmp = f => [40, 32, 24, 20, 16].map(s => `<figure><img src="${f}" width="${s}">${s}px</figure>`).join('');
+  document.getElementById('cmpOld').innerHTML = cmp('icon.svg');
+  document.getElementById('cmpNew').innerHTML = cmp('icon-small.svg');
+  document.getElementById('cmpBar').innerHTML =
+    `<img src="icon.svg" width="24" title="原版"><img src="icon-small.svg" width="24" title="加粗版">`;
+  const tray = [16, 20, 24, 32].map(s => `<img src="tray.svg" width="${s}" title="${s}px">`).join('');
+  document.getElementById('trayDark').innerHTML = tray;
+  document.getElementById('trayLight').innerHTML = tray;
+</script>
+</body>
+</html>

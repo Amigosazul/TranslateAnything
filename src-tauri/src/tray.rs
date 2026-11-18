@@ -14,7 +14,9 @@ static LAST: Mutex<String> = Mutex::new(String::new());
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app, &immersive::statuses(app))?;
-    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+    // 托盘用专门的透明底图标（笔画加粗，见 design/logo/tray.svg），深浅任务栏都能看清
+    let builder = TrayIconBuilder::with_id(TRAY_ID)
+        .icon(tauri::include_image!("icons/tray.png"))
         .tooltip("随译")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -24,9 +26,6 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                 let _ = settings::open_settings(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
     builder.build(app)?;
     Ok(())
 }
