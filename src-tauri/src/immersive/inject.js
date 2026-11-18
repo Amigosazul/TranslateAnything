@@ -8,6 +8,13 @@
 //   没命中的攒成一批，通过 CDP binding（__tfSend）交给随译主程序，
 //   主程序查本地译文库 / 调翻译引擎后调用 __tf.receive() 回填。
 //   MutationObserver 持续监听新增节点和文字变化，界面怎么刷新都能跟上。
+//
+// 性能（脚本和页面共用主线程，切页时页面一次挂载成千上万个节点）：
+//   - 分片处理：观察者回调里先同步处理一小片（命中缓存的当场替换，首屏不闪原文），
+//     其余放到后续任务里接着做，每片不超过 SLICE 毫秒，不把页面卡住
+//   - 节点的记录挂在节点自身（隔离环境里的属性，页面看不见），节点被页面丢弃后随之回收，
+//     来回切页不会越积越多
+//   - "是否值得翻译"的判断结果按原文记忆，相同文字只算一次
 (() => {
   'use strict';
   // 同一隔离环境里已有旧版脚本（主程序重新接管时）：先让它恢复原文并卸载
@@ -18,9 +25,14 @@
 
   // 文字不翻译的区域：代码、输入框、可编辑区（不能改用户正在输入的内容）、显式声明不翻译的元素
   // select 整个跳过：没有 value 属性的 option 改了文字会连带改掉提交值
-  const SKIP = [
+  const SKIP_TAGS = new Set([
     'script', 'style', 'noscript', 'template', 'textarea', 'input', 'select',
     'code', 'pre', 'kbd', 'samp', 'var', 'svg', 'math', 'canvas',
+  ]);
+  const EDITABLE = new Set(['', 'true', 'plaintext-only']);
+  const CUSTOM_SKIP = (CFG.skipSelectors || []).join(',');
+  const SKIP = [
+    ...SKIP_TAGS,
     '[contenteditable=""]', '[contenteditable="true"]', '[contenteditable="plaintext-only"]',
     '[translate="no"]', '.notranslate',
     ...(CFG.skipSelectors || []),
@@ -33,13 +45,17 @@
   ].join(',');
   const ATTRS = ['placeholder', 'title'];
   const BATCH = 200;
-  const CJK = /[぀-ヿ㐀-䶿一-鿿豈-﫿]/g;
+  /** 每片处理最多占用主线程的毫秒数 */
+  const SLICE = 8;
+  const CJK = /[぀-ヿ㐀-䶿一-鿿豈-﫿]/g;
   const LETTER = /\p{L}/gu;
+  // 节点上的记录：Text 节点 → { src, a, core, b, shown }；元素 → { 属性名: 同上 }
+  const REC = Symbol('tf');
+  const AREC = Symbol('tfa');
 
   let enabled = CFG.enabled !== false;
   const cache = new Map(Object.entries(CFG.preload || {})); // 原文 → 译文
-  const textRec = new Map(); // Text 节点 → { src, a, core, b, shown }
-  const attrRec = new Map(); // Element → Map(属性名 → 同上)
+  const verdict = new Map(); // 原文 → 是否值得翻译（记忆 worth 的结果）
   const waiting = new Map(); // 原文 → Set(等待回填的目标)
   const queue = new Set(); // 待发送的原文
   const inflight = new Set(); // 已发送、等待译文的原文
@@ -51,8 +67,7 @@
   const TAKEOVER = '__translate_filter_takeover__';
 
   /** 是否值得翻译（与悬浮窗模式 layout.rs 的 needs_translation 保持一致，再多过滤掉标识符） */
-  function worth(s) {
-    const t = s.trim();
+  function worth(t) {
     if (t.length < 2 || t.length > 5000) return false;
     const letters = (t.match(LETTER) || []).length;
     if (letters < 2) return false;
@@ -64,10 +79,29 @@
     return true;
   }
 
+  /** 已去掉首尾空白的原文是否值得翻译，结果记住（页面里相同的文字反复出现） */
+  function worthCore(core) {
+    let v = verdict.get(core);
+    if (v === undefined) {
+      if (verdict.size > 50000) verdict.clear();
+      verdict.set(core, (v = worth(core)));
+    }
+    return v;
+  }
+
   /** 拆出首尾空白，只翻中间部分，写回时原样补上 */
-  function split(v) {
-    const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(v);
-    return { src: v, a: m[1], core: m[2], b: m[3], shown: null };
+  function record(v, core) {
+    const lead = v.length - v.trimStart().length;
+    return { src: v, a: v.slice(0, lead), core, b: v.slice(lead + core.length), shown: null };
+  }
+
+  /** 元素自身是否属于不翻译的区域（子树整个跳过） */
+  function skipEl(el) {
+    if (SKIP_TAGS.has(el.localName)) return true;
+    const ce = el.getAttribute('contenteditable');
+    if (ce !== null && EDITABLE.has(ce)) return true;
+    if (el.getAttribute('translate') === 'no' || el.classList.contains('notranslate')) return true;
+    return CUSTOM_SKIP !== '' && el.matches(CUSTOM_SKIP);
   }
 
   function skippedText(el) {
@@ -77,23 +111,23 @@
   // ───────────── 文字节点 ─────────────
 
   function handleText(node, checked) {
-    if (!enabled) return;
     const v = node.data;
-    const old = textRec.get(node);
+    const old = node[REC];
     if (old && v === old.shown) return; // 我们自己写进去的
-    if (!worth(v) || (!checked && skippedText(node.parentElement))) {
-      if (old) textRec.delete(node);
+    const core = v.trim();
+    if (!worthCore(core) || (!checked && skippedText(node.parentElement))) {
+      if (old) node[REC] = undefined;
       return;
     }
-    const r = split(v);
-    textRec.set(node, r);
-    const tr = cache.get(r.core);
+    const r = record(v, core);
+    node[REC] = r;
+    const tr = cache.get(core);
     if (tr !== undefined) applyText(node, r, tr);
-    else want(r.core, node, null);
+    else want(core, node, null);
   }
 
   function applyText(node, r, tr) {
-    if (textRec.get(node) !== r || node.data !== r.src) return; // 期间被页面改掉了
+    if (node[REC] !== r || node.data !== r.src) return; // 期间被页面改掉了
     r.shown = r.a + tr + r.b;
     if (r.shown !== r.src) node.data = r.shown;
   }
@@ -101,28 +135,46 @@
   // ───────────── 属性 ─────────────
 
   function handleAttr(el, name) {
-    if (!enabled) return;
     const v = el.getAttribute(name);
-    let m = attrRec.get(el);
-    const old = m && m.get(name);
+    const m = el[AREC];
+    const old = m && m[name];
     if (old && v === old.shown) return;
-    if (v == null || !worth(v) || el.closest(ATTR_SKIP)) {
-      if (old) m.delete(name);
+    const core = v == null ? '' : v.trim();
+    if (!worthCore(core) || el.closest(ATTR_SKIP)) {
+      if (old) delete m[name];
       return;
     }
-    const r = split(v);
-    if (!m) attrRec.set(el, (m = new Map()));
-    m.set(name, r);
-    const tr = cache.get(r.core);
+    const r = record(v, core);
+    (m || (el[AREC] = {}))[name] = r;
+    const tr = cache.get(core);
     if (tr !== undefined) applyAttr(el, name, r, tr);
-    else want(r.core, el, name);
+    else want(core, el, name);
   }
 
   function applyAttr(el, name, r, tr) {
-    const m = attrRec.get(el);
-    if (!m || m.get(name) !== r || el.getAttribute(name) !== r.src) return;
+    const m = el[AREC];
+    if (!m || m[name] !== r || el.getAttribute(name) !== r.src) return;
     r.shown = r.a + tr + r.b;
     if (r.shown !== r.src) el.setAttribute(name, r.shown);
+  }
+
+  /** 遍历页面（含开放的 Shadow DOM）里所有带记录的文字节点和属性：fn(节点, 属性名或 null, 记录) */
+  function eachRecord(fn) {
+    const roots = [document.documentElement];
+    while (roots.length) {
+      const root = roots.pop();
+      if (!root) continue;
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+      for (let n = w.currentNode; n; n = w.nextNode()) {
+        if (n.nodeType === 3) {
+          if (n[REC]) fn(n, null, n[REC]);
+          continue;
+        }
+        const m = n[AREC];
+        if (m) for (const name of Object.keys(m)) fn(n, name, m[name]);
+        if (n.shadowRoot) roots.push(n.shadowRoot);
+      }
+    }
   }
 
   // ───────────── 与主程序通信 ─────────────
@@ -170,10 +222,10 @@
       if (!set || !enabled) continue;
       for (const t of set) {
         if (t.node) {
-          const r = textRec.get(t.node);
+          const r = t.node[REC];
           if (r && r.core === src) applyText(t.node, r, tr);
         } else {
-          const r = attrRec.get(t.el)?.get(t.attr);
+          const r = t.el[AREC]?.[t.attr];
           if (r && r.core === src) applyAttr(t.el, t.attr, r, tr);
         }
       }
@@ -190,69 +242,141 @@
     }, 10000);
   }
 
-  // ───────────── 遍历与监听 ─────────────
+  // ───────────── 遍历与监听（分片） ─────────────
+
+  // 待处理的工作，按先后顺序：{ text: 节点 } | { attr: [元素, 属性名] } | { root: 新增子树 } | { walker: 遍历到一半的子树 }
+  let work = [];
+  let head = 0;
+  let scheduled = false;
+  // 用 MessageChannel 排下一片：比 setTimeout 及时（没有 4ms 下限），又让出主线程给页面渲染和响应输入
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => {
+    scheduled = false;
+    pump();
+  };
+
+  function later() {
+    if (!scheduled) {
+      scheduled = true;
+      channel.port2.postMessage(0);
+    }
+  }
+
+  /** 处理元素自身的属性和开放的 Shadow DOM；返回是否继续深入它的子节点 */
+  function visitElement(el) {
+    if (el.hasAttribute('placeholder')) handleAttr(el, 'placeholder');
+    if (el.hasAttribute('title')) handleAttr(el, 'title');
+    if (el.shadowRoot) {
+      observe(el.shadowRoot);
+      work.push({ root: el.shadowRoot });
+    }
+    return !skipEl(el);
+  }
+
+  const FILTER = {
+    acceptNode(n) {
+      if (n.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+      return visitElement(n) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_REJECT;
+    },
+  };
+
+  /** 开始处理一棵新增子树：先确认它不在跳过区域内；需要深入遍历时返回遍历器 */
+  function startRoot(n) {
+    if (!n.isConnected) return null;
+    if (n.nodeType === 3) {
+      handleText(n, false);
+      return null;
+    }
+    if (n.nodeType === 1) {
+      if (n.parentElement && n.parentElement.closest(SKIP)) {
+        // 跳过区域里的元素仍可能带 placeholder/title
+        for (const a of ATTRS) if (n.hasAttribute(a)) handleAttr(n, a);
+        return null;
+      }
+      if (!visitElement(n)) return null;
+    } else if (n.nodeType !== 11) {
+      return null; // 注释等
+    }
+    return document.createTreeWalker(n, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, FILTER);
+  }
+
+  /** 处理待办工作，最多 SLICE 毫秒，没做完的排到下一片 */
+  function pump() {
+    if (disposed || !enabled) return;
+    const end = performance.now() + SLICE;
+    let n = 0;
+    while (head < work.length) {
+      const it = work[head];
+      if (it.root) {
+        const w = startRoot(it.root);
+        if (!w) {
+          head++;
+        } else {
+          work[head] = { walker: w };
+        }
+      } else if (it.walker) {
+        let node;
+        while ((node = it.walker.nextNode())) {
+          handleText(node, true);
+          if ((++n & 63) === 0 && performance.now() > end) return later();
+        }
+        head++;
+      } else if (it.text) {
+        head++;
+        if (it.text.isConnected) handleText(it.text, false);
+      } else {
+        head++;
+        if (it.attr[0].isConnected) handleAttr(it.attr[0], it.attr[1]);
+      }
+      if ((++n & 63) === 0 && performance.now() > end) return later();
+    }
+    work = [];
+    head = 0;
+  }
 
   const mo = new MutationObserver((list) => {
     for (const m of list) {
-      if (m.type === 'characterData') handleText(m.target, false);
-      else if (m.type === 'attributes') handleAttr(m.target, m.attributeName);
-      else for (const n of m.addedNodes) if (n.isConnected) scanRoot(n);
+      if (m.type === 'characterData') {
+        // 我们自己写入引起的变化直接跳过，不进队列
+        const r = m.target[REC];
+        if (!r || m.target.data !== r.shown) work.push({ text: m.target });
+      } else if (m.type === 'attributes') {
+        const r = m.target[AREC]?.[m.attributeName];
+        if (!r || m.target.getAttribute(m.attributeName) !== r.shown) work.push({ attr: [m.target, m.attributeName] });
+      } else {
+        for (const n of m.addedNodes) work.push({ root: n });
+      }
     }
+    // 先同步做一片：命中缓存的文字在这一帧画出来之前就换好，不闪原文
+    pump();
   });
 
   function observe(root) {
     mo.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ATTRS });
   }
 
-  /** 新增子树：先确认它不在跳过区域内 */
-  function scanRoot(n) {
-    if (n.nodeType === 3) return handleText(n, false);
-    if (n.nodeType !== 1) return;
-    if (n.parentElement && n.parentElement.closest(SKIP)) {
-      // 跳过区域里的元素仍可能带 placeholder/title
-      for (const a of ATTRS) if (n.hasAttribute(a)) handleAttr(n, a);
-      return;
-    }
-    scan(n);
-  }
-
-  /** 处理元素自身的属性和开放的 Shadow DOM；返回是否继续深入它的子节点 */
-  function visitElement(el) {
-    for (const a of ATTRS) if (el.hasAttribute(a)) handleAttr(el, a);
-    if (el.shadowRoot) {
-      observe(el.shadowRoot);
-      scan(el.shadowRoot);
-    }
-    return !el.matches(SKIP);
-  }
-
-  function scan(root) {
-    if (root.nodeType === 1 && !visitElement(root)) return;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
-      acceptNode(n) {
-        if (n.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
-        return visitElement(n) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_REJECT;
-      },
-    });
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) handleText(n, true);
-  }
-
   function start() {
     const root = document.documentElement;
     if (!root) return;
     observe(root);
-    scan(document.body || root);
+    work.push({ root: document.body || root });
+    pump();
   }
 
   function stop(restore = true) {
     mo.disconnect();
-    if (restore) {
-      for (const [node, r] of textRec) if (r.shown !== null && node.data === r.shown) node.data = r.src;
-      for (const [el, m] of attrRec)
-        for (const [name, r] of m) if (r.shown !== null && el.getAttribute(name) === r.shown) el.setAttribute(name, r.src);
-    }
-    textRec.clear();
-    attrRec.clear();
+    mo.takeRecords();
+    work = [];
+    head = 0;
+    eachRecord((node, name, r) => {
+      if (name === null) {
+        if (restore && r.shown !== null && node.data === r.shown) node.data = r.src;
+        node[REC] = undefined;
+      } else {
+        if (restore && r.shown !== null && node.getAttribute(name) === r.shown) node.setAttribute(name, r.src);
+        delete node[AREC][name];
+      }
+    });
     waiting.clear();
     queue.clear();
     inflight.clear();
@@ -278,20 +402,19 @@
     for (const [src, tr] of Object.entries(set)) cache.set(src, tr);
     for (const src of del) cache.delete(src);
     if (!enabled) return;
-    const redo = (r, cur, write, target, attr) => {
+    eachRecord((node, name, r) => {
+      const cur = name === null ? node.data : node.getAttribute(name);
       if (cur !== r.src && cur !== r.shown) return; // 已被页面改成别的内容，由观察者处理
+      const write = (v) => (name === null ? (node.data = v) : node.setAttribute(name, v));
       if (Object.hasOwn(set, r.core)) {
         r.shown = r.a + set[r.core] + r.b;
         if (cur !== r.shown) write(r.shown);
       } else if (del.has(r.core)) {
         if (cur !== r.src) write(r.src);
         r.shown = null;
-        want(r.core, target, attr);
+        want(r.core, node, name);
       }
-    };
-    for (const [node, r] of textRec) redo(r, node.data, (v) => (node.data = v), node, null);
-    for (const [el, m] of attrRec)
-      for (const [name, r] of m) redo(r, el.getAttribute(name), (v) => el.setAttribute(name, v), el, name);
+    });
   }
 
   /** 卸载：停止监听、清掉定时器；restore 为真时把页面恢复成原文 */
@@ -300,8 +423,8 @@
     stop(restore);
     disposed = true;
     enabled = false;
-    clearInterval(gc);
     clearTimeout(timer);
+    channel.port1.onmessage = null;
     document.removeEventListener(TAKEOVER, onTakeover);
     if (globalThis.__tf === api) delete globalThis.__tf;
   }
@@ -309,12 +432,6 @@
   function onTakeover() {
     dispose(true);
   }
-
-  // 定期清理已离开页面的节点，长时间运行的单页应用不至于越积越多
-  const gc = setInterval(() => {
-    for (const node of textRec.keys()) if (!node.isConnected) textRec.delete(node);
-    for (const el of attrRec.keys()) if (!el.isConnected) attrRec.delete(el);
-  }, 30000);
 
   const api = { receive, failed, setEnabled, patch, dispose };
   globalThis.__tf = api;
