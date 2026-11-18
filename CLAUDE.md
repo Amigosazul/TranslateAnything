@@ -8,7 +8,7 @@
 - 本机下载 crates / 访问境外接口走 Clash：`HTTP(S)_PROXY=http://127.0.0.1:7897`（环境变量里原有的 51828 不可用）。
 - 技术选型、交互细节均已在文档中定稿，不要推翻重来；有疑问先问用户。
 - 开发环境：Node 22 + pnpm、Rust 1.100（stable-msvc）已装好；VS Build Tools 收尾中；**英文 OCR 语言包缺失**、环境变量代理会导致 HTTPS 失败——详见 `docs/03-开发环境.md` 第 0 步。
-- 仓库已 `git init`（main 分支），尚无提交。
+- **沉浸模式原型已合入 main**（2026-11-17）：译文本地库 `store.rs`、术语表 `translate/glossary.json`、Electron/Chromium 通道 `immersive/`、启动脚本 `scripts/immersive-launch.ps1`；管理界面（M3）未做。
 
 ## 已定决策（用户拍板，勿改）
 
@@ -16,6 +16,7 @@
 2. 翻译链路：**默认 OCR + 翻译 API**；OCR 用 Windows 原生 `Windows.Media.Ocr`（离线、免依赖）。
 3. 翻译 API：抽象成 **Provider 接口，必须可配置**。**默认用传统翻译引擎、不走大模型**（2026-11-16 用户改定）：默认 `edge`（免 key 的 Edge 翻译接口，失败回退 Bing 网页版），可选 Google 免费接口、微软/DeepL/Google 官方 API、自建 DeepLX、OpenAI 兼容大模型。配置支持同时存多个引擎 + 主用引擎 + 回退顺序，为后续设置界面让用户自行配置预留（引擎清单见 `translate::CATALOG` / `engine_catalog` 命令）。不使用网上流传的 API key 或逆向得到的签名私钥。
 4. 视觉直译模式（VLM 直接看图翻译）作为**扩展点预留**，不在第一版实现。
+5. **悬浮窗 + 沉浸两种模式并存**（2026-11-17 用户确认）：沉浸模式不改软件本体、在目标应用内部原地改写文字，按通道逐个接入，首个适配 reclaude 客户端（Electron，走 CDP）；接管不了的照样用悬浮窗。翻译过的文字存本地译文库，命中直接查库不再请求引擎。沉浸模式必须**可管理**（按应用开关、状态、身份校验、译文库与术语表管理），见技术方案"沉浸模式"一节。
 
 ## 文档索引
 

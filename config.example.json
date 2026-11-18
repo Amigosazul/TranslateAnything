@@ -5,6 +5,19 @@
   "ocr_lang": "auto",
   "engine": "edge",
   "fallback": ["bing", "google_free"],
+  "persist_cache": true,
+  "builtin_glossary": true,
+  "glossary": {
+    "Opus": "Opus",
+    "Artifacts": "工件"
+  },
+  "immersive": {
+    "enabled": true,
+    "hotkey": "Alt+Shift+T",
+    "targets": [
+      { "name": "reclaude 客户端", "port": 39222, "url_prefixes": [], "skip_selectors": [] }
+    ]
+  },
   "engines": {
     "edge": {},
     "bing": {},

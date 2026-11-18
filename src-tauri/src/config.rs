@@ -26,6 +26,15 @@ pub struct Config {
     pub fallback: Vec<String>,
     /// 各引擎参数，键为引擎 id；未出现的引擎按默认参数使用
     pub engines: BTreeMap<String, ProviderConfig>,
+    /// 译文写入本地库（`~/.translate-filter/translations.db`），相同原文下次直接查库不再请求引擎
+    pub persist_cache: bool,
+    /// 使用内置的界面常用词术语表（如 New → 新建），避免引擎翻单个词时没有上下文而翻错
+    pub builtin_glossary: bool,
+    /// 自定义术语表：原文 → 译文，整条精确匹配，优先于内置术语表、译文库和引擎。
+    /// 译文写成与原文相同即"保持原样不翻"
+    pub glossary: BTreeMap<String, String>,
+    /// 沉浸模式：直接改写目标应用界面里的文字（目前支持 Electron/Chromium 内核应用）
+    pub immersive: ImmersiveConfig,
     /// 旧版单引擎写法，仅为兼容；有 `engines` 时忽略
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderConfig>,
@@ -49,6 +58,44 @@ pub struct ProviderConfig {
     pub proxy: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImmersiveConfig {
+    /// 总开关
+    pub enabled: bool,
+    /// 在"译文 / 原文"之间切换的全局快捷键（启动时读取）
+    pub hotkey: String,
+    /// 要接管的应用；应用需要带 `--remote-debugging-port=<port>` 启动
+    pub targets: Vec<ImmersiveTarget>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImmersiveTarget {
+    /// 显示名
+    pub name: String,
+    /// 远程调试端口（只监听本机 127.0.0.1）
+    pub port: u16,
+    /// 只处理地址以这些前缀开头的页面；留空 = 该应用的所有页面
+    pub url_prefixes: Vec<String>,
+    /// 额外不翻译的元素（CSS 选择器），如聊天正文、代码区
+    pub skip_selectors: Vec<String>,
+}
+
+impl Default for ImmersiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hotkey: "Alt+Shift+T".into(),
+            targets: vec![ImmersiveTarget {
+                name: "reclaude 客户端".into(),
+                port: 39222,
+                ..Default::default()
+            }],
+        }
+    }
+}
+
 impl ProviderConfig {
     pub fn kind_or(&self, id: &str) -> String {
         let k = self.kind.trim();
@@ -66,6 +113,10 @@ impl Default for Config {
             engine: "edge".into(),
             fallback: Vec::new(),
             engines: BTreeMap::new(),
+            persist_cache: true,
+            builtin_glossary: true,
+            glossary: BTreeMap::new(),
+            immersive: ImmersiveConfig::default(),
             provider: None,
         }
     }

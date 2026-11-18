@@ -14,7 +14,9 @@ use crate::config::{Config, ProviderConfig};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -162,8 +164,65 @@ fn engine_name(kind: &str) -> &str {
     CATALOG.iter().find(|e| e.id == kind).map_or(kind, |e| e.name)
 }
 
-/// 按配置的主引擎 + 回退顺序依次尝试批量翻译，返回（译文，实际使用的引擎名）
+/// 本地缓存全部命中时返回的"引擎名"
+pub const CACHE_ENGINE: &str = "本地缓存";
+
+/// 术语表：内置界面常用词（`glossary.json`，按目标语言）+ 配置里的 `glossary`（后者优先）。
+/// 按整条原文精确匹配（忽略首尾空白），命中的不查库也不请求引擎。
+/// 传统翻译引擎翻单个界面词没有上下文，容易出"New → 新款""Auto → 汽车"这类错，靠它兜住。
+pub fn glossary(cfg: &Config) -> HashMap<String, String> {
+    static BUILTIN: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
+    let mut map = HashMap::new();
+    if cfg.builtin_glossary {
+        let builtin = BUILTIN.get_or_init(|| serde_json::from_str(include_str!("glossary.json")).unwrap_or_default());
+        let key = match primary(&cfg.target_lang).as_str() {
+            "zh" if is_traditional(&cfg.target_lang) => "zh-TW".to_string(),
+            "zh" => "zh-CN".to_string(),
+            p => p.to_string(),
+        };
+        if let Some(m) = builtin.get(&key) {
+            map.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
+    map.extend(cfg.glossary.iter().map(|(k, v)| (k.trim().to_string(), v.clone())));
+    map
+}
+
+/// 批量翻译：术语表 → 本地译文库 → 翻译引擎（主引擎 + 回退），引擎结果写回译文库。
+/// 返回（与 `texts` 一一对应的译文，实际使用的引擎名；没有请求引擎时为"本地缓存"）
 pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Result<(Vec<String>, String), String> {
+    let lang = cfg.target_lang.as_str();
+    let terms = glossary(cfg);
+    let mut found: HashMap<String, String> = texts
+        .iter()
+        .filter_map(|t| terms.get(t.trim()).map(|g| (t.clone(), g.clone())))
+        .collect();
+    let rest: Vec<String> = texts.iter().filter(|t| !found.contains_key(*t)).cloned().collect();
+    if cfg.persist_cache && !rest.is_empty() {
+        found.extend(crate::store::get_many(lang, &rest));
+    }
+    let mut missing: Vec<String> = Vec::new();
+    for t in rest {
+        if !found.contains_key(&t) && !missing.contains(&t) {
+            missing.push(t);
+        }
+    }
+    let engine = if missing.is_empty() {
+        CACHE_ENGINE.to_string()
+    } else {
+        let (translated, engine) = translate_by_engines(cfg, &missing).await?;
+        let pairs: Vec<(String, String)> = missing.into_iter().zip(translated).collect();
+        if cfg.persist_cache {
+            crate::store::put_many(lang, &pairs, &engine);
+        }
+        found.extend(pairs);
+        engine
+    };
+    Ok((texts.iter().map(|t| found[t].clone()).collect(), engine))
+}
+
+/// 按配置的主引擎 + 回退顺序依次尝试批量翻译（不查缓存），返回（译文，实际使用的引擎名）
+async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<String>, String), String> {
     let mut errors = Vec::new();
     for (id, provider) in cfg.engine_chain() {
         let kind = provider.kind_or(&id);
@@ -339,6 +398,21 @@ mod tests {
         assert_eq!(ms_lang("zh-TW"), "zh-Hant");
         assert_eq!(google_lang("zh-Hans"), "zh-CN");
         assert_eq!(ms_lang("ja-JP"), "ja");
+    }
+
+    #[test]
+    fn 术语表() {
+        let mut cfg = Config::default();
+        let g = glossary(&cfg);
+        assert_eq!(g["New"], "新建");
+        cfg.glossary.insert(" New ".into(), "新的".into());
+        assert_eq!(glossary(&cfg)["New"], "新的", "用户术语优先");
+        cfg.builtin_glossary = false;
+        cfg.glossary.clear();
+        assert!(glossary(&cfg).is_empty());
+        cfg.builtin_glossary = true;
+        cfg.target_lang = "ja".into();
+        assert!(!glossary(&cfg).contains_key("New"), "其他目标语言不用中文术语");
     }
 
     #[test]
