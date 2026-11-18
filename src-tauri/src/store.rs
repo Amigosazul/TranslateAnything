@@ -1,4 +1,4 @@
-//! 译文本地持久缓存：`~/.translate-filter/translations.db`（SQLite）
+//! 译文本地持久缓存：`~/.translate-anything/translations.db`（SQLite）
 //!
 //! 翻译过的文字存进本地库，下次遇到相同原文（同一目标语言）直接查库，不再请求翻译引擎。
 //! 悬浮窗模式和沉浸模式共用这一份缓存。
@@ -19,7 +19,7 @@ const MAX_SOURCE_CHARS: usize = 4000;
 static STORE: OnceLock<Option<Mutex<Connection>>> = OnceLock::new();
 
 pub fn db_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".translate-filter").join("translations.db"))
+    crate::config::data_dir().map(|d| d.join("translations.db"))
 }
 
 fn open(path: &PathBuf) -> rusqlite::Result<Connection> {

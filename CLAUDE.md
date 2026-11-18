@@ -1,6 +1,10 @@
-# translate-filter — 截图框选翻译滤镜
+# 随译 TranslateAnything（原名 translate-filter）
 
-桌面端"翻译滤镜"工具：全局快捷键触发 → 全屏框选一个区域 → 自动对区域内容截屏 + OCR + 翻译，并以浮窗形式把译文覆盖/显示在该区域上；浮窗可随时拖动和缩放，位置或尺寸变化后自动重新识别翻译。交互参考 PixPin 截图软件，但不做任何图像标注/编辑功能。
+中文名**随译**，英文名 **TranslateAnything**（2026-11-18 用户定名）。包名 `translate-anything`，Tauri identifier `com.richard.translateanything`（定了别再改，它决定系统里的数据目录）。仓库目录名仍可能是旧的 `translate-filter`。
+
+定位：屏幕上的文字随处可译——软件界面走沉浸模式原地改写，图片/视频等任意画面走悬浮窗模式；后续规划音频同声传译、语音转字幕。
+
+悬浮窗模式最初的形态：全局快捷键触发 → 全屏框选一个区域 → 自动对区域内容截屏 + OCR + 翻译，并以浮窗形式把译文覆盖/显示在该区域上；浮窗可随时拖动和缩放，位置或尺寸变化后自动重新识别翻译。交互参考 PixPin 截图软件，但不做任何图像标注/编辑功能。
 
 ## 当前状态（2026-11-16）
 
@@ -30,5 +34,5 @@
 ## 约定
 
 - 面向用户的文案、注释、文档一律用简体中文。
-- 配置文件放用户目录（`~/.translate-filter/config.json`），不进仓库；仓库里放 `config.example.json`。
+- 配置文件放用户目录（`~/.translate-anything/config.json`，旧目录 `~/.translate-filter` 启动时自动迁移，见 `config::data_dir`），不进仓库；仓库里放 `config.example.json`。
 - API key 等敏感信息永远不写进代码和文档。

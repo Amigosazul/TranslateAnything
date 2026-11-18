@@ -3,7 +3,7 @@
 //! 第一个通道面向 Electron / Chromium 内核应用（reclaude 客户端、VS Code 等）：
 //! 应用带 `--remote-debugging-port=<端口>` 启动后，本模块通过 Chrome DevTools Protocol
 //! 连上它的每个页面，往隔离环境里注入 `inject.js`，由脚本在 DOM 里原地替换文字。
-//! 软件本体（exe、asar）一个字节都不改，停用或退出 translate-filter 即恢复原文。
+//! 软件本体（exe、asar）一个字节都不改，停用或退出随译即恢复原文。
 //!
 //! 管理模型：配置里每个应用对应一个"运行器"（[`Runner`]），各自有开关、原文/译文状态和运行状态。
 //! 改配置后调用 [`reload`]：只重启配置有变化的应用，术语表的变化直接推送到已打开的页面。

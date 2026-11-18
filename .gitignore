@@ -4,7 +4,7 @@ dist/
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# 个人配置（真实配置放在 ~/.translate-filter/config.json，这里防误放）
+# 个人配置（真实配置放在 ~/.translate-anything/config.json，这里防误放）
 config.json
 .env
 .env.*

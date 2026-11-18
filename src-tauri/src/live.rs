@@ -108,7 +108,7 @@ pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(),
     let state = app.state::<LiveState>();
     let label = format!("frame-{}", state.seq.fetch_add(1, Ordering::Relaxed) + 1);
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("frame.html".into()))
-        .title("翻译滤镜")
+        .title("随译")
         .decorations(false)
         .transparent(true)
         .shadow(false)

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "translate-filter",
+  "productName": "TranslateAnything",
   "version": "0.1.0",
-  "identifier": "com.translatefilter.app",
+  "identifier": "com.richard.translateanything",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",

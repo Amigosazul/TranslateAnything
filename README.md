@@ -1,6 +1,8 @@
-# translate-filter · 截图框选翻译滤镜
+# 随译 · TranslateAnything
 
-快捷键框选屏幕任意区域，框内文字被实时识别翻译，译文按原文位置覆盖显示（沉浸式），看起来就像软件本身支持了这种语言；内容滚动、变化时译文跟着刷新，翻译框不影响下方软件的操作。交互参考 PixPin，只做翻译，不做图像处理。
+屏幕上的文字随处可译：软件界面用沉浸模式原地改写成中文，图片、视频等任意画面用悬浮窗模式覆盖译文；后续计划支持音频同声传译和语音转字幕。
+
+悬浮窗模式：快捷键框选屏幕任意区域，框内文字被实时识别翻译，译文按原文位置覆盖显示（沉浸式），看起来就像软件本身支持了这种语言；内容滚动、变化时译文跟着刷新，翻译框不影响下方软件的操作。交互参考 PixPin，只做翻译，不做图像处理。
 
 - 技术栈：Tauri 2 + Rust + Vite（Windows 优先）
 - OCR：Windows 原生 `Windows.Media.Ocr`（离线）
@@ -23,7 +25,7 @@
 
 ## 配置
 
-不写配置也能用（默认 `edge` 引擎免 key）。需要切换引擎、配置回退顺序或代理时，复制 [config.example.json](config.example.json) 到 `~/.translate-filter/config.json` 修改，字段说明见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“翻译 Provider 抽象”一节。
+不写配置也能用（默认 `edge` 引擎免 key）。需要切换引擎、配置回退顺序或代理时，复制 [config.example.json](config.example.json) 到 `~/.translate-anything/config.json`（旧版的 `~/.translate-filter` 目录会在首次启动时自动迁移） 修改，字段说明见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“翻译 Provider 抽象”一节。
 
 ## 许可证
 

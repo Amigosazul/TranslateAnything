@@ -56,7 +56,7 @@ pub fn run() {
             if let Err(e) = app.global_shortcut().register(hotkey.as_str()) {
                 eprintln!("注册快捷键 {hotkey} 失败（可能被其他程序占用）：{e}");
             } else {
-                println!("translate-filter 已启动，按 {hotkey} 框选翻译");
+                println!("随译已启动，按 {hotkey} 框选翻译");
             }
             // 切换快捷键总是注册（总开关可在运行中打开），没有接管中的应用时按了也无副作用
             let key = cfg.immersive.hotkey;

@@ -5,7 +5,7 @@
 .DESCRIPTION
   沉浸模式需要目标应用带 --remote-debugging-port 启动。reclaude 启动客户端时会带一组自己的参数
   （代理、用户数据目录等），所以本脚本不自己拼参数，而是：
-    1. 读取正在运行的客户端主进程的完整命令行，保存到 ~/.translate-filter/launch-<名称>.txt；
+    1. 读取正在运行的客户端主进程的完整命令行，保存到 ~/.translate-anything/launch-<名称>.txt；
     2. 等你从托盘菜单把客户端完全退出；
     3. 用同样的命令行 + --remote-debugging-port=<端口> 重新打开。
   客户端没在运行时，直接用上次保存的命令行启动。
@@ -25,7 +25,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$saveDir = Join-Path $env:USERPROFILE '.translate-filter'
+$saveDir = Join-Path $env:USERPROFILE '.translate-anything'
+# 改名前的旧数据目录：新目录还没有时整个迁移过来（和主程序启动时的迁移逻辑一致），
+# 否则先建了新目录，主程序就不会再迁移旧目录里的配置和译文库
+$legacyDir = Join-Path $env:USERPROFILE '.translate-filter'
+if (-not (Test-Path $saveDir) -and (Test-Path $legacyDir -PathType Container)) {
+  try { Rename-Item -Path $legacyDir -NewName '.translate-anything' }
+  catch { $saveDir = $legacyDir }
+}
 $saveFile = Join-Path $saveDir "launch-$Name.txt"
 
 function Get-MainProcess {
@@ -75,4 +82,4 @@ $argLine = ($args0 -replace '--remote-debugging-port=\d+', '').Trim()
 $argLine = "$argLine --remote-debugging-port=$Port"
 
 Start-Process -FilePath $Exe -ArgumentList $argLine | Out-Null
-Write-Host "已以沉浸模式启动（调试端口 $Port）。translate-filter 运行中会自动接管它的界面。"
+Write-Host "已以沉浸模式启动（调试端口 $Port）。随译运行中会自动接管它的界面。"

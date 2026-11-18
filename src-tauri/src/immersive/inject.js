@@ -5,7 +5,7 @@
 //
 // 工作方式（对应 GText 的"H5 页面"通道）：
 //   遍历 DOM 文本节点和 placeholder/title 属性 → 需要翻译的原文先查页面内缓存，命中当场替换；
-//   没命中的攒成一批，通过 CDP binding（__tfSend）交给 translate-filter 主程序，
+//   没命中的攒成一批，通过 CDP binding（__tfSend）交给随译主程序，
 //   主程序查本地译文库 / 调翻译引擎后调用 __tf.receive() 回填。
 //   MutationObserver 持续监听新增节点和文字变化，界面怎么刷新都能跟上。
 (() => {
@@ -47,6 +47,7 @@
   let disposed = false;
   // 主程序重启或重新接管时会在新的隔离环境里再注入一份；隔离环境之间互相看不见，
   // 只能通过共享的 DOM 事件通知旧脚本让位（恢复原文并卸载），避免两份脚本同时改写页面
+  // 事件名沿用改名前的旧名，不要改：目标应用里可能还留着旧版注入的脚本，它只认这个名字
   const TAKEOVER = '__translate_filter_takeover__';
 
   /** 是否值得翻译（与悬浮窗模式 layout.rs 的 needs_translation 保持一致，再多过滤掉标识符） */

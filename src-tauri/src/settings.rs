@@ -19,7 +19,7 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("settings.html".into()))
-        .title("翻译滤镜 · 设置")
+        .title("随译 · 设置")
         .inner_size(1000.0, 720.0)
         .min_inner_size(760.0, 520.0)
         .center()

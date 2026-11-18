@@ -15,7 +15,7 @@ static LAST: Mutex<String> = Mutex::new(String::new());
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app, &immersive::statuses(app))?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("翻译滤镜")
+        .tooltip("随译")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu)

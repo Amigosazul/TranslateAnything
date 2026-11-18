@@ -4967,7 +4967,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "translate-filter"
+name = "translate-anything"
 version = "0.1.0"
 dependencies = [
  "async-trait",

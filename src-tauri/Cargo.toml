@@ -1,7 +1,7 @@
 [package]
-name = "translate-filter"
+name = "translate-anything"
 version = "0.1.0"
-description = "截图框选翻译滤镜"
+description = "随译——屏幕、软件界面随处可译"
 authors = ["李智谦"]
 edition = "2024"
 
@@ -11,7 +11,7 @@ edition = "2024"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "translate_filter_lib"
+name = "translate_anything_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -51,5 +51,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 opt-level = 1
 
 # 本项目自身（逐帧截屏比对、位移估计都在这里）在开发构建里也全速优化，依赖仍用上面的 opt-level 1
-[profile.dev.package.translate-filter]
+[profile.dev.package.translate-anything]
 opt-level = 3

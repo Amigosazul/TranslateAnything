@@ -1,4 +1,4 @@
-//! 配置读写：`~/.translate-filter/config.json`
+//! 配置读写：`~/.translate-anything/config.json`
 //!
 //! 每次翻译时重新读取，修改配置文件后无需重启即可生效（快捷键除外）。
 //!
@@ -26,7 +26,7 @@ pub struct Config {
     pub fallback: Vec<String>,
     /// 各引擎参数，键为引擎 id；未出现的引擎按默认参数使用
     pub engines: BTreeMap<String, ProviderConfig>,
-    /// 译文写入本地库（`~/.translate-filter/translations.db`），相同原文下次直接查库不再请求引擎
+    /// 译文写入本地库（`~/.translate-anything/translations.db`），相同原文下次直接查库不再请求引擎
     pub persist_cache: bool,
     /// 使用内置的界面常用词术语表（如 New → 新建），避免引擎翻单个词时没有上下文而翻错
     pub builtin_glossary: bool,
@@ -173,8 +173,38 @@ impl Config {
     }
 }
 
+/// 用户数据目录名（配置、译文库、沉浸模式启动参数备份都放这里）
+const DATA_DIR: &str = ".translate-anything";
+/// 改名前（translate-filter 时期）的数据目录名，启动时自动迁移
+const LEGACY_DATA_DIR: &str = ".translate-filter";
+
+/// 用户数据目录 `~/.translate-anything`
+///
+/// 首次调用时：新目录不存在而旧目录 `~/.translate-filter` 存在，就把旧目录整个改名过来
+/// （配置、译文库、术语表等原样保留）。改名失败（如旧版程序还开着、文件被占用）时继续用旧目录，
+/// 下次启动再试。
+pub fn data_dir() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let home = dirs::home_dir()?;
+        let dir = home.join(DATA_DIR);
+        let legacy = home.join(LEGACY_DATA_DIR);
+        if !dir.exists() && legacy.is_dir() {
+            match std::fs::rename(&legacy, &dir) {
+                Ok(()) => println!("已将旧数据目录 {} 迁移到 {}", legacy.display(), dir.display()),
+                Err(e) => {
+                    eprintln!("迁移旧数据目录 {} 失败，本次继续使用旧目录：{e}", legacy.display());
+                    return Some(legacy);
+                }
+            }
+        }
+        Some(dir)
+    })
+    .clone()
+}
+
 pub fn config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".translate-filter").join("config.json"))
+    data_dir().map(|d| d.join("config.json"))
 }
 
 /// 读取配置；文件不存在时返回默认配置（默认引擎免 key，开箱即用）

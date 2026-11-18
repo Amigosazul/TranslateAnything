@@ -11,7 +11,7 @@ use tauri::AppHandle;
 use tokio::sync::{broadcast, watch};
 
 /// 注入脚本运行的隔离环境名
-const WORLD: &str = "translate-filter";
+const WORLD: &str = "translate-anything";
 /// 页面脚本回调主程序用的函数名
 const BINDING: &str = "__tfSend";
 const SCRIPT: &str = include_str!("inject.js");

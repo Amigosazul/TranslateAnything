@@ -52,7 +52,7 @@ fn run() -> windows::core::Result<()> {
 
     unsafe {
         let hinst = GetModuleHandleW(None)?;
-        let class = w!("TranslateFilterWheelListener");
+        let class = w!("TranslateAnythingWheelListener");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(wndproc),
             hInstance: hinst.into(),

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    translate_filter_lib::run()
+    translate_anything_lib::run()
 }
