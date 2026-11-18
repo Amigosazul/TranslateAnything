@@ -80,8 +80,9 @@ export function keys(hotkey: string): HTMLElement {
   return box;
 }
 
-export function pageHead(title: string, lead: string, ...extra: Child[]): HTMLElement {
-  return h("header", { class: "page-head" }, h("div", { class: "grow" }, h("h1", {}, title), lead && h("p", { class: "lead" }, lead)), ...extra);
+/** 页首说明：侧栏选中项已表明当前页，这里不再重复大标题，只留一句说明，随内容滚动 */
+export function pageHead(lead: string, ...extra: Child[]): HTMLElement {
+  return h("header", { class: "page-head" }, h("p", { class: "lead grow" }, lead), ...extra);
 }
 
 export function section(title: string, ...extra: Child[]): HTMLElement {

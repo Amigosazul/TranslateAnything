@@ -104,7 +104,7 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("#nav button")) {
   });
 }
 
-// 滚动：页面标题栏离开顶部后加一道细阴影；滚过一屏的三分之一显示"回到顶部"
+// 滚动：滚过一屏的三分之一显示"回到顶部"
 const mainEl = document.querySelector("main")!;
 const toTop = document.getElementById("to-top")!;
 let scrollTick = 0;
@@ -114,7 +114,6 @@ mainEl.addEventListener(
     if (scrollTick) return;
     scrollTick = requestAnimationFrame(() => {
       scrollTick = 0;
-      mainEl.classList.toggle("scrolled", mainEl.scrollTop > 4);
       toTop.classList.toggle("show", mainEl.scrollTop > mainEl.clientHeight / 3);
     });
   },

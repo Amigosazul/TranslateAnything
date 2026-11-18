@@ -11,7 +11,7 @@ import {
   methodOf,
   saveConfig,
 } from "../state";
-import { dropdown, fmt, h, icon, keys, segmented, switchEl, type Child, type IconName } from "../ui";
+import { dropdown, fmt, h, icon, keys, pageHead, segmented, switchEl, type Child, type IconName } from "../ui";
 import { go } from "../nav";
 import { t } from "../../i18n";
 import { setMasterSwitch, toggleAllButton } from "./immersive";
@@ -183,11 +183,7 @@ export function renderDashboard(root: HTMLElement) {
   );
 
   root.replaceChildren(
-    h(
-      "header",
-      { class: "page-head" },
-      h("div", { class: "grow" }, h("h1", {}, t("nav.dashboard")), h("p", { class: "lead" }, t("dash.lead"))),
-    ),
+    pageHead(t("dash.lead")),
     h("div", { class: "tiles" }, overlay, immersive, translation, language, llmTile, store),
   );
 }

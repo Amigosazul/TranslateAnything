@@ -78,7 +78,7 @@ export function renderGlossary(root: HTMLElement) {
   fillBuiltin();
 
   root.replaceChildren(
-    pageHead(t("glossary.title"), t("glossary.lead")),
+    pageHead(t("glossary.lead")),
     h(
       "div",
       { class: "card flush" },

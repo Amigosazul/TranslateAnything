@@ -134,7 +134,7 @@ export function renderImmersive(root: HTMLElement) {
     );
 
   root.replaceChildren(
-    pageHead(t("immersive.title"), t("immersive.lead")),
+    pageHead(t("immersive.lead")),
     hero,
     h(
       "div",

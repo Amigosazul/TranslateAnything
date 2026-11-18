@@ -316,7 +316,7 @@ export function renderEngines(root: HTMLElement) {
   );
 
   root.replaceChildren(
-    pageHead(t("engines.title"), t("engines.lead")),
+    pageHead(t("engines.lead")),
     methodCard,
     section(t("engines.section.engines"), method === "llm" && h("span", { class: "count" }, t("engines.section.asBackup"))),
     h("div", { class: "desc list-hint" }, method === "llm" ? t("engines.order.descLlm") : t("engines.order.desc")),

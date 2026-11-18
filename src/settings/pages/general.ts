@@ -65,7 +65,7 @@ export function renderGeneral(root: HTMLElement) {
     );
 
   root.replaceChildren(
-    pageHead(t("nav.general"), t("general.lead")),
+    pageHead(t("general.lead")),
     h(
       "div",
       { class: "card flush" },

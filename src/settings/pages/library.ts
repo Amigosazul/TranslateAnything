@@ -38,7 +38,7 @@ export function buildLibrary(root: HTMLElement) {
     queryLibrary();
   });
   root.replaceChildren(
-    pageHead(t("library.title"), t("library.lead")),
+    pageHead(t("library.lead")),
     h(
       "div",
       { class: "card flush" },
