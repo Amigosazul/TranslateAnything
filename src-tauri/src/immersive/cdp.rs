@@ -36,13 +36,15 @@ pub async fn connect(ws_url: &str) -> Result<(Cdp, mpsc::UnboundedReceiver<Event
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
     let pending: Pending = Arc::default();
 
-    // 写：串行发送
+    // 写：串行发送。所有 Cdp 副本都释放后主动发关闭帧：
+    // 只丢掉写端连接不会断，CDP 会话会一直挂着，登记的自动注入和 binding 也一直有效
     tokio::spawn(async move {
         while let Some(m) = rx.recv().await {
             if sink.send(m).await.is_err() {
-                break;
+                return;
             }
         }
+        let _ = sink.close().await;
     });
 
     // 读：响应交给等待者，事件转发出去

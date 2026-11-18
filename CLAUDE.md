@@ -8,7 +8,8 @@
 - 本机下载 crates / 访问境外接口走 Clash：`HTTP(S)_PROXY=http://127.0.0.1:7897`（环境变量里原有的 51828 不可用）。
 - 技术选型、交互细节均已在文档中定稿，不要推翻重来；有疑问先问用户。
 - 开发环境：Node 22 + pnpm、Rust 1.100（stable-msvc）已装好；VS Build Tools 收尾中；**英文 OCR 语言包缺失**、环境变量代理会导致 HTTPS 失败——详见 `docs/03-开发环境.md` 第 0 步。
-- **沉浸模式原型已合入 main**（2026-11-17）：译文本地库 `store.rs`、术语表 `translate/glossary.json`、Electron/Chromium 通道 `immersive/`、启动脚本 `scripts/immersive-launch.ps1`；管理界面（M3）未做。
+- **沉浸模式与管理界面**（2026-11-18）：译文本地库 `store.rs`、术语表 `translate/glossary.json`、Electron/Chromium 通道 `immersive/`（运行器管理、身份校验、热更新）、托盘 `tray.rs`、设置窗口 `settings.rs` + `src/settings/`。翻译引擎设置界面、开机自启未做。
+- 自测设置窗口：`cargo build --features tauri/custom-protocol`（嵌入 dist，不依赖 1420 端口的开发服务器），以 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<端口>` 和 `--settings` 参数启动，就能通过 CDP 截图和调用命令。
 
 ## 已定决策（用户拍板，勿改）
 

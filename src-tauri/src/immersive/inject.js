@@ -10,7 +10,8 @@
 //   MutationObserver 持续监听新增节点和文字变化，界面怎么刷新都能跟上。
 (() => {
   'use strict';
-  if (globalThis.__tf) return;
+  // 同一隔离环境里已有旧版脚本（主程序重新接管时）：先让它恢复原文并卸载
+  if (globalThis.__tf) globalThis.__tf.dispose(true);
 
   // 主程序注入时替换为实际配置：{ enabled, skipCjk, skipSelectors, preload }
   const CFG = /*__TF_CONFIG__*/ {};
@@ -43,6 +44,10 @@
   const queue = new Set(); // 待发送的原文
   const inflight = new Set(); // 已发送、等待译文的原文
   let timer = 0;
+  let disposed = false;
+  // 主程序重启或重新接管时会在新的隔离环境里再注入一份；隔离环境之间互相看不见，
+  // 只能通过共享的 DOM 事件通知旧脚本让位（恢复原文并卸载），避免两份脚本同时改写页面
+  const TAKEOVER = '__translate_filter_takeover__';
 
   /** 是否值得翻译（与悬浮窗模式 layout.rs 的 needs_translation 保持一致，再多过滤掉标识符） */
   function worth(s) {
@@ -155,6 +160,7 @@
 
   /** 主程序回填译文：{ map: { 原文: 译文 } } */
   function receive(msg) {
+    if (disposed) return;
     for (const [src, tr] of Object.entries(msg.map || {})) {
       cache.set(src, tr);
       inflight.delete(src);
@@ -237,11 +243,13 @@
     scan(document.body || root);
   }
 
-  function stop() {
+  function stop(restore = true) {
     mo.disconnect();
-    for (const [node, r] of textRec) if (r.shown !== null && node.data === r.shown) node.data = r.src;
-    for (const [el, m] of attrRec)
-      for (const [name, r] of m) if (r.shown !== null && el.getAttribute(name) === r.shown) el.setAttribute(name, r.src);
+    if (restore) {
+      for (const [node, r] of textRec) if (r.shown !== null && node.data === r.shown) node.data = r.src;
+      for (const [el, m] of attrRec)
+        for (const [name, r] of m) if (r.shown !== null && el.getAttribute(name) === r.shown) el.setAttribute(name, r.src);
+    }
     textRec.clear();
     attrRec.clear();
     waiting.clear();
@@ -250,6 +258,7 @@
   }
 
   function setEnabled(on) {
+    if (disposed) return;
     on = !!on;
     if (on === enabled) return;
     enabled = on;
@@ -257,13 +266,61 @@
     else stop();
   }
 
+  /**
+   * 主程序推送的修改（改了术语表、译文库）：
+   * set：原文 → 新译文，已显示的立即换成新译文；del：忘掉这些原文的旧译文，重新请求翻译
+   */
+  function patch(msg) {
+    if (disposed) return;
+    const set = msg.set || {};
+    const del = new Set(msg.del || []);
+    for (const [src, tr] of Object.entries(set)) cache.set(src, tr);
+    for (const src of del) cache.delete(src);
+    if (!enabled) return;
+    const redo = (r, cur, write, target, attr) => {
+      if (cur !== r.src && cur !== r.shown) return; // 已被页面改成别的内容，由观察者处理
+      if (Object.hasOwn(set, r.core)) {
+        r.shown = r.a + set[r.core] + r.b;
+        if (cur !== r.shown) write(r.shown);
+      } else if (del.has(r.core)) {
+        if (cur !== r.src) write(r.src);
+        r.shown = null;
+        want(r.core, target, attr);
+      }
+    };
+    for (const [node, r] of textRec) redo(r, node.data, (v) => (node.data = v), node, null);
+    for (const [el, m] of attrRec)
+      for (const [name, r] of m) redo(r, el.getAttribute(name), (v) => el.setAttribute(name, v), el, name);
+  }
+
+  /** 卸载：停止监听、清掉定时器；restore 为真时把页面恢复成原文 */
+  function dispose(restore) {
+    if (disposed) return;
+    stop(restore);
+    disposed = true;
+    enabled = false;
+    clearInterval(gc);
+    clearTimeout(timer);
+    document.removeEventListener(TAKEOVER, onTakeover);
+    if (globalThis.__tf === api) delete globalThis.__tf;
+  }
+
+  function onTakeover() {
+    dispose(true);
+  }
+
   // 定期清理已离开页面的节点，长时间运行的单页应用不至于越积越多
-  setInterval(() => {
+  const gc = setInterval(() => {
     for (const node of textRec.keys()) if (!node.isConnected) textRec.delete(node);
     for (const el of attrRec.keys()) if (!el.isConnected) attrRec.delete(el);
   }, 30000);
 
-  globalThis.__tf = { receive, failed, setEnabled };
+  const api = { receive, failed, setEnabled, patch, dispose };
+  globalThis.__tf = api;
+
+  // 先通知其他隔离环境里的旧脚本让位，再开始监听（自己发的事件不会被自己收到）
+  document.dispatchEvent(new CustomEvent(TAKEOVER));
+  document.addEventListener(TAKEOVER, onTakeover);
 
   if (enabled) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });

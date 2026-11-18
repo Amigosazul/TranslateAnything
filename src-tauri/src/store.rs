@@ -142,6 +142,109 @@ pub fn recent(lang: &str, limit: usize) -> Vec<(String, String)> {
     r.unwrap_or_default()
 }
 
+// ───────────────────────── 管理（设置界面用） ─────────────────────────
+
+/// 译文库里的一条记录
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Entry {
+    pub lang: String,
+    pub source: String,
+    pub target: String,
+    pub engine: String,
+    /// 用户手工改过（自动翻译不会覆盖）
+    pub manual: bool,
+    pub hits: i64,
+    pub used_at: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct Page {
+    pub total: i64,
+    pub rows: Vec<Entry>,
+}
+
+fn with_conn<T>(f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
+    let c = conn().ok_or("译文库无法打开")?;
+    let mut c = c.lock().unwrap();
+    f(&mut c).map_err(|e| format!("译文库操作失败：{e}"))
+}
+
+/// 分页查询：按最近使用排序；`keyword` 同时匹配原文和译文；`manual_only` 只看手工译文
+pub fn query(lang: &str, keyword: &str, manual_only: bool, offset: i64, limit: i64) -> Result<Page, String> {
+    with_conn(|c| query_in(c, lang, keyword, manual_only, offset, limit))
+}
+
+fn query_in(c: &Connection, lang: &str, keyword: &str, manual_only: bool, offset: i64, limit: i64) -> rusqlite::Result<Page> {
+    // LIKE 的通配符要转义，用户搜 "100%" 不能匹配全部
+    let kw = format!("%{}%", keyword.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let filter = "lang = ?1 AND (source LIKE ?2 ESCAPE '\\' OR target LIKE ?2 ESCAPE '\\') AND (?3 = 0 OR manual = 1)";
+    let total = c.query_row(
+        &format!("SELECT COUNT(*) FROM translations WHERE {filter}"),
+        params![lang, kw, manual_only as i64],
+        |r| r.get(0),
+    )?;
+    let mut stmt = c.prepare(&format!(
+        "SELECT lang, source, target, engine, manual, hits, used_at FROM translations
+         WHERE {filter} ORDER BY used_at DESC, source LIMIT ?4 OFFSET ?5"
+    ))?;
+    let rows = stmt
+        .query_map(params![lang, kw, manual_only as i64, limit, offset], |r| {
+            Ok(Entry {
+                lang: r.get(0)?,
+                source: r.get(1)?,
+                target: r.get(2)?,
+                engine: r.get(3)?,
+                manual: r.get::<_, i64>(4)? != 0,
+                hits: r.get(5)?,
+                used_at: r.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Page { total, rows })
+}
+
+/// 手工改译（不存在则新增），标记为手工译文
+pub fn set_manual(lang: &str, source: &str, target: &str) -> Result<(), String> {
+    with_conn(|c| set_manual_in(c, lang, source, target))
+}
+
+fn set_manual_in(c: &Connection, lang: &str, source: &str, target: &str) -> rusqlite::Result<()> {
+    let t = now();
+    c.execute(
+        "INSERT INTO translations (lang, source, target, engine, manual, created_at, used_at)
+         VALUES (?1, ?2, ?3, '手工', 1, ?4, ?4)
+         ON CONFLICT (lang, source) DO UPDATE SET target = excluded.target, manual = 1",
+        params![lang, source, target, t],
+    )?;
+    Ok(())
+}
+
+/// 删除若干条，返回删除条数
+pub fn delete(lang: &str, sources: &[String]) -> Result<usize, String> {
+    with_conn(|c| {
+        let tx = c.transaction()?;
+        let mut n = 0;
+        {
+            let mut stmt = tx.prepare("DELETE FROM translations WHERE lang = ?1 AND source = ?2")?;
+            for s in sources {
+                n += stmt.execute(params![lang, s])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    })
+}
+
+/// 清空某个目标语言的译文；`keep_manual` 为真时保留手工译文。返回删除条数
+pub fn clear(lang: &str, keep_manual: bool) -> Result<usize, String> {
+    with_conn(|c| {
+        c.execute(
+            "DELETE FROM translations WHERE lang = ?1 AND (?2 = 0 OR manual = 0)",
+            params![lang, keep_manual as i64],
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +269,25 @@ mod tests {
         assert_eq!(hit["Settings"], "设置");
         // 不同目标语言互不干扰
         assert!(get_many_in(&c, "ja", &["Settings".into()]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 查询与改译() {
+        let mut c = mem();
+        let pairs = vec![
+            ("Open file".to_string(), "打开文件".to_string()),
+            ("100% done".to_string(), "完成".to_string()),
+            ("Close".to_string(), "关闭".to_string()),
+        ];
+        put_many_in(&mut c, "zh-CN", &pairs, "edge").unwrap();
+        assert_eq!(query_in(&c, "zh-CN", "", false, 0, 10).unwrap().total, 3);
+        assert_eq!(query_in(&c, "zh-CN", "文件", false, 0, 10).unwrap().total, 1, "按译文搜");
+        assert_eq!(query_in(&c, "zh-CN", "%", false, 0, 10).unwrap().total, 1, "百分号按字面匹配");
+        set_manual_in(&c, "zh-CN", "Close", "关掉").unwrap();
+        set_manual_in(&c, "zh-CN", "New", "新建").unwrap();
+        let manual = query_in(&c, "zh-CN", "", true, 0, 10).unwrap();
+        assert_eq!(manual.total, 2);
+        assert!(manual.rows.iter().all(|r| r.manual));
     }
 
     #[test]

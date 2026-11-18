@@ -69,17 +69,37 @@ pub struct ImmersiveConfig {
     pub targets: Vec<ImmersiveTarget>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImmersiveTarget {
     /// 显示名
     pub name: String,
-    /// 远程调试端口（只监听本机 127.0.0.1）
+    /// 是否接管这个应用（单独开关）
+    pub enabled: bool,
+    /// 程序完整路径。用于身份校验（调试端口背后必须是这个程序才接管）和"以沉浸模式启动"
+    pub exe: String,
+    /// 启动参数（不含调试端口）。"以沉浸模式启动"时使用；应用在运行时会自动从它的命令行读取并记下
+    pub args: String,
+    /// 远程调试端口（只监听本机 127.0.0.1），各应用不能重复
     pub port: u16,
     /// 只处理地址以这些前缀开头的页面；留空 = 该应用的所有页面
     pub url_prefixes: Vec<String>,
     /// 额外不翻译的元素（CSS 选择器），如聊天正文、代码区
     pub skip_selectors: Vec<String>,
+}
+
+impl Default for ImmersiveTarget {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            enabled: true,
+            exe: String::new(),
+            args: String::new(),
+            port: 0,
+            url_prefixes: Vec::new(),
+            skip_selectors: Vec::new(),
+        }
+    }
 }
 
 impl Default for ImmersiveConfig {
@@ -89,6 +109,9 @@ impl Default for ImmersiveConfig {
             hotkey: "Alt+Shift+T".into(),
             targets: vec![ImmersiveTarget {
                 name: "reclaude 客户端".into(),
+                exe: dirs::home_dir()
+                    .map(|h| h.join(".rec").join("claude-app").join("app").join("claude.exe").to_string_lossy().into_owned())
+                    .unwrap_or_default(),
                 port: 39222,
                 ..Default::default()
             }],
@@ -165,6 +188,39 @@ pub fn load() -> Result<Config, String> {
     serde_json::from_str(&text).map_err(|e| format!("配置文件格式错误：{}\n{e}", path.display()))
 }
 
+/// 检查配置是否可以保存（端口重复等）
+pub fn validate(cfg: &Config) -> Result<(), String> {
+    let mut ports = std::collections::HashSet::new();
+    for t in &cfg.immersive.targets {
+        if t.name.trim().is_empty() {
+            return Err("沉浸模式：应用名称不能为空".into());
+        }
+        if t.port < 1024 {
+            return Err(format!("沉浸模式：「{}」的调试端口必须在 1024 到 65535 之间", t.name));
+        }
+        if !ports.insert(t.port) {
+            return Err(format!("沉浸模式：调试端口 {} 被多个应用重复使用", t.port));
+        }
+    }
+    if cfg.target_lang.trim().is_empty() {
+        return Err("目标语言不能为空".into());
+    }
+    Ok(())
+}
+
+/// 保存配置：先写临时文件再替换，写到一半出错不会损坏原文件
+pub fn save(cfg: &Config) -> Result<(), String> {
+    validate(cfg)?;
+    let path = config_path().ok_or("无法定位用户目录")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败：{e}"))?;
+    }
+    let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("写入配置失败：{e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("替换配置文件失败：{e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +243,23 @@ mod tests {
         let chain = cfg.engine_chain();
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].0, "openai");
+    }
+
+    #[test]
+    fn 校验端口重复() {
+        let mut cfg = Config::default();
+        assert!(validate(&cfg).is_ok());
+        let mut t = cfg.immersive.targets[0].clone();
+        t.name = "另一个".into();
+        cfg.immersive.targets.push(t);
+        assert!(validate(&cfg).unwrap_err().contains("重复"));
+    }
+
+    #[test]
+    fn 旧配置补齐新字段() {
+        let cfg: Config = serde_json::from_str(r#"{"immersive":{"targets":[{"name":"a","port":40000}]}}"#).unwrap();
+        assert!(cfg.immersive.targets[0].enabled, "缺省为启用");
+        assert!(cfg.immersive.enabled);
     }
 
     #[test]

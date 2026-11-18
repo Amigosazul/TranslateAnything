@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>翻译滤镜 · 设置</title>
+    <link rel="stylesheet" href="/src/settings/settings.css" />
+  </head>
+  <body>
+    <nav id="nav">
+      <div class="brand">翻译滤镜</div>
+      <button data-tab="immersive" class="active">沉浸模式</button>
+      <button data-tab="library">译文库</button>
+      <button data-tab="glossary">术语表</button>
+      <button data-tab="general">常规</button>
+    </nav>
+    <main>
+      <section id="tab-immersive" class="tab active"></section>
+      <section id="tab-library" class="tab"></section>
+      <section id="tab-glossary" class="tab"></section>
+      <section id="tab-general" class="tab"></section>
+    </main>
+    <div id="toast" hidden></div>
+    <div id="modal" hidden></div>
+    <script type="module" src="/src/settings/main.ts"></script>
+  </body>
+</html>

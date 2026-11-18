@@ -3,287 +3,404 @@
 //! 第一个通道面向 Electron / Chromium 内核应用（reclaude 客户端、VS Code 等）：
 //! 应用带 `--remote-debugging-port=<端口>` 启动后，本模块通过 Chrome DevTools Protocol
 //! 连上它的每个页面，往隔离环境里注入 `inject.js`，由脚本在 DOM 里原地替换文字。
-//! 软件本体（exe、asar）一个字节都不改，关掉 translate-filter 或按切换快捷键即恢复原文。
+//! 软件本体（exe、asar）一个字节都不改，停用或退出 translate-filter 即恢复原文。
 //!
-//! 数据流：页面脚本收集原文 → binding 回调到这里 → `translate::translate_batch_with_fallback`
-//! （先查本地译文库，未命中才请求引擎）→ `Runtime.evaluate` 调页面的 `__tf.receive()` 回填。
+//! 管理模型：配置里每个应用对应一个"运行器"（[`Runner`]），各自有开关、原文/译文状态和运行状态。
+//! 改配置后调用 [`reload`]：只重启配置有变化的应用，术语表的变化直接推送到已打开的页面。
+//!
+//! 身份校验：调试端口背后的进程必须就是配置里的程序（`exe`），否则拒绝接管。
 
 mod cdp;
+mod launch;
+pub mod procs;
+mod session;
 
-use crate::config::{self, Config, ImmersiveTarget};
-use crate::{store, translate};
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use crate::config::{self, ImmersiveTarget};
+use crate::translate;
+use serde::Serialize;
+use serde_json::json;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
-use tokio::sync::watch;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::{broadcast, watch};
 
-/// 注入脚本运行的隔离环境名
-const WORLD: &str = "translate-filter";
-/// 页面脚本回调主程序用的函数名
-const BINDING: &str = "__tfSend";
-const SCRIPT: &str = include_str!("inject.js");
-const CONFIG_SLOT: &str = "/*__TF_CONFIG__*/ {}";
-/// 注入时预加载的最近常用译文条数
-const PRELOAD: usize = 5000;
+pub use launch::{DetectedApp, detect_apps, launch};
+
+/// 应用的运行状态
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum State {
+    /// 沉浸模式总开关已关闭
+    Off,
+    /// 这个应用被单独停用
+    Disabled,
+    /// 应用没在运行
+    NotRunning,
+    /// 应用在运行，但不是以沉浸模式启动的（没开调试端口）
+    NoPort,
+    /// 调试端口被别的程序占用，拒绝接管
+    Conflict,
+    /// 正在等用户退出应用，以便用沉浸模式重新打开
+    Waiting,
+    /// 已连上
+    Attached,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PageInfo {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// 推给设置界面和托盘的单个应用状态
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TargetStatus {
+    pub port: u16,
+    pub name: String,
+    pub enabled: bool,
+    pub state: State,
+    /// 给人看的状态说明
+    pub message: String,
+    /// 已接管的页面
+    pub pages: Vec<PageInfo>,
+    /// true = 显示译文，false = 显示原文
+    pub show: bool,
+    /// 本次运行中回填到页面的条数
+    pub translated: u64,
+    /// 本次运行中请求翻译引擎的批次（其余都命中术语表 / 译文库）
+    pub engine_batches: u64,
+    /// "以沉浸模式启动"流程中的提示；有值时覆盖探测结果显示为等待状态
+    #[serde(skip)]
+    pub waiting: Option<String>,
+}
+
+impl TargetStatus {
+    fn new(t: &ImmersiveTarget, state: State, message: &str) -> Self {
+        Self {
+            port: t.port,
+            name: t.name.clone(),
+            enabled: t.enabled,
+            state,
+            message: message.into(),
+            pages: Vec::new(),
+            show: true,
+            translated: 0,
+            engine_batches: 0,
+            waiting: None,
+        }
+    }
+}
+
+pub type SharedStatus = Arc<Mutex<TargetStatus>>;
+
+struct Runner {
+    cfg: ImmersiveTarget,
+    /// 决定要不要重启的配置指纹
+    key: String,
+    show: watch::Sender<bool>,
+    stop: watch::Sender<bool>,
+    status: SharedStatus,
+}
 
 /// 沉浸模式运行状态（Tauri 托管）
 pub struct ImmersiveState {
-    /// true = 显示译文，false = 显示原文
-    show: watch::Sender<bool>,
+    runners: Mutex<Vec<Runner>>,
+    /// 广播给所有已接管页面的 JS 表达式（术语表 / 译文库修改后推送）
+    patch: broadcast::Sender<String>,
+    /// 上次推送给页面的术语表，用来算差异
+    glossary: Mutex<HashMap<String, String>>,
+    /// 上次发出的状态（去重）
+    last: Mutex<String>,
 }
 
 impl Default for ImmersiveState {
     fn default() -> Self {
-        Self { show: watch::channel(true).0 }
+        Self {
+            runners: Mutex::default(),
+            patch: broadcast::channel(64).0,
+            glossary: Mutex::default(),
+            last: Mutex::default(),
+        }
     }
 }
 
-/// 启动：为每个配置的目标应用开一个守护任务，应用开着就接管，关了就等它再开
-pub fn start(app: &AppHandle) {
+/// 启动或按最新配置重新加载。只重启配置有变化的应用；术语表变化直接推送到页面
+pub fn reload(app: &AppHandle) {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{e}\n沉浸模式未启动");
+            eprintln!("{e}\n沉浸模式未加载新配置");
             return;
         }
     };
-    if !cfg.immersive.enabled {
-        return;
-    }
-    let show = app.state::<ImmersiveState>().show.subscribe();
-    for target in cfg.immersive.targets.into_iter().filter(|t| t.port != 0) {
-        println!("沉浸模式：等待「{}」（调试端口 {}）", target.name, target.port);
-        tauri::async_runtime::spawn(supervise(target, show.clone()));
-    }
-}
-
-/// 在"译文 / 原文"之间切换，返回切换后是否显示译文
-pub fn toggle(app: &AppHandle) -> bool {
     let state = app.state::<ImmersiveState>();
-    state.show.send_modify(|v| *v = !*v);
-    let now = *state.show.borrow();
-    println!("沉浸模式：{}", if now { "显示译文" } else { "显示原文" });
-    now
-}
-
-#[tauri::command]
-pub fn immersive_toggle(app: AppHandle) -> bool {
-    toggle(&app)
-}
-
-#[derive(Debug, Deserialize)]
-struct TargetInfo {
-    id: String,
-    #[serde(rename = "type")]
-    kind: String,
-    url: String,
-    #[serde(rename = "webSocketDebuggerUrl", default)]
-    ws: String,
-}
-
-async fn list_targets(port: u16) -> Result<Vec<TargetInfo>, String> {
-    // 必须直连：本机环境变量里的代理会把 127.0.0.1 的请求也转走
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|e| e.to_string())?;
-    client
-        .get(format!("http://127.0.0.1:{port}/json/list"))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-fn wanted(t: &TargetInfo, target: &ImmersiveTarget) -> bool {
-    if !matches!(t.kind.as_str(), "page" | "iframe" | "webview") || t.ws.is_empty() {
-        return false;
-    }
-    if t.url.starts_with("devtools://") || t.url.starts_with("chrome") || t.url == "about:blank" {
-        return false;
-    }
-    target.url_prefixes.is_empty() || target.url_prefixes.iter().any(|p| t.url.starts_with(p.as_str()))
-}
-
-async fn supervise(target: ImmersiveTarget, show: watch::Receiver<bool>) {
-    let attached: Arc<Mutex<HashSet<String>>> = Arc::default();
-    let mut online = false;
-    loop {
-        match list_targets(target.port).await {
-            Ok(list) => {
-                if !online {
-                    online = true;
-                    println!("沉浸模式：已连上「{}」", target.name);
+    {
+        let mut runners = state.runners.lock().unwrap();
+        let mut old: HashMap<u16, Runner> = runners.drain(..).map(|r| (r.cfg.port, r)).collect();
+        for t in &cfg.immersive.targets {
+            let active = cfg.immersive.enabled && t.enabled;
+            let key = json!({ "t": t, "lang": cfg.target_lang, "active": active }).to_string();
+            let mut show = true;
+            if let Some(r) = old.remove(&t.port) {
+                if r.key == key {
+                    runners.push(r);
+                    continue;
                 }
-                for t in list.into_iter().filter(|t| wanted(t, &target)) {
-                    if !attached.lock().unwrap().insert(t.id.clone()) {
-                        continue;
-                    }
-                    let (attached, target, show) = (attached.clone(), target.clone(), show.clone());
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = session(&t, &target, show).await {
-                            eprintln!("沉浸模式：页面 {} 接管失败：{e}", t.url);
-                        }
-                        attached.lock().unwrap().remove(&t.id);
-                    });
-                }
+                show = *r.show.borrow();
+                let _ = r.stop.send(true);
             }
-            Err(_) => {
-                if online {
-                    online = false;
-                    println!("沉浸模式：「{}」已关闭，等待重新打开", target.name);
-                }
+            let (st, msg) = match (cfg.immersive.enabled, t.enabled) {
+                (false, _) => (State::Off, "沉浸模式总开关已关闭"),
+                (true, false) => (State::Disabled, "已停用"),
+                _ => (State::NotRunning, "检测中……"),
+            };
+            let runner = Runner {
+                cfg: t.clone(),
+                key,
+                show: watch::channel(show).0,
+                stop: watch::channel(false).0,
+                status: Arc::new(Mutex::new(TargetStatus::new(t, st, msg))),
+            };
+            if active {
+                tauri::async_runtime::spawn(supervise(
+                    app.clone(),
+                    t.clone(),
+                    runner.show.subscribe(),
+                    runner.stop.subscribe(),
+                    runner.status.clone(),
+                ));
+            }
+            runners.push(runner);
+        }
+        // 配置里删掉的应用：停掉（页面恢复原文）
+        for r in old.into_values() {
+            let _ = r.stop.send(true);
+        }
+    }
+    push_glossary(app, &cfg);
+    // 配置可能是托盘、设置窗口或启动流程改的，通知设置窗口重新读取
+    let _ = app.emit("config-changed", ());
+    notify(app);
+}
+
+/// 术语表有变化时，把差异推送到所有已接管的页面
+fn push_glossary(app: &AppHandle, cfg: &config::Config) {
+    let state = app.state::<ImmersiveState>();
+    let new = translate::glossary(cfg);
+    let mut last = state.glossary.lock().unwrap();
+    let set: HashMap<&String, &String> = new.iter().filter(|(k, v)| last.get(*k) != Some(*v)).collect();
+    let del: Vec<&String> = last.keys().filter(|k| !new.contains_key(*k)).collect();
+    if !set.is_empty() || !del.is_empty() {
+        broadcast_patch(app, json!({ "set": set, "del": del }));
+    }
+    *last = new;
+}
+
+/// 推送给页面：`set` 原文 → 新译文（立即替换已显示的），`del` 原文列表（忘掉旧译文、重新翻译）
+pub fn broadcast_patch(app: &AppHandle, patch: serde_json::Value) {
+    let expr = format!("globalThis.__tf && __tf.patch({patch})");
+    let _ = app.state::<ImmersiveState>().patch.send(expr);
+}
+
+/// 当前所有应用的状态
+pub fn statuses(app: &AppHandle) -> Vec<TargetStatus> {
+    let state = app.state::<ImmersiveState>();
+    let runners = state.runners.lock().unwrap();
+    runners
+        .iter()
+        .map(|r| {
+            let mut s = r.status.lock().unwrap().clone();
+            s.show = *r.show.borrow();
+            s
+        })
+        .collect()
+}
+
+/// 状态有变化时通知设置界面和托盘
+pub fn notify(app: &AppHandle) {
+    let list = statuses(app);
+    let text = serde_json::to_string(&list).unwrap_or_default();
+    {
+        let state = app.state::<ImmersiveState>();
+        let mut last = state.last.lock().unwrap();
+        if *last == text {
+            return;
+        }
+        *last = text;
+    }
+    let _ = app.emit("immersive-status", &list);
+    crate::tray::refresh(app, &list);
+}
+
+/// 设置原文 / 译文显示。`port` 为空表示所有应用
+pub fn set_show(app: &AppHandle, port: Option<u16>, show: bool) {
+    {
+        let state = app.state::<ImmersiveState>();
+        for r in state.runners.lock().unwrap().iter() {
+            if port.is_none_or(|p| p == r.cfg.port) {
+                let _ = r.show.send(show);
             }
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
+    notify(app);
 }
 
-/// 组装注入脚本：把配置和预加载译文（译文库最近常用 + 术语表）填进占位符
-fn build_script(cfg: &Config, target: &ImmersiveTarget, show: bool) -> String {
-    let target_lang = cfg.target_lang.as_str();
-    let mut preload: HashMap<String, String> = if cfg.persist_cache {
-        store::recent(target_lang, PRELOAD).into_iter().collect()
-    } else {
-        HashMap::new()
+/// 全局快捷键：有任一应用在显示译文就全部切回原文，否则全部显示译文。返回切换后是否显示译文
+pub fn toggle(app: &AppHandle) -> bool {
+    let any_shown = statuses(app).iter().any(|s| s.state == State::Attached && s.show);
+    set_show(app, None, !any_shown);
+    println!("沉浸模式：{}", if any_shown { "显示原文" } else { "显示译文" });
+    !any_shown
+}
+
+/// 退出前：停掉所有应用（页面恢复原文），最多等 1.5 秒
+pub async fn shutdown(app: &AppHandle) {
+    let statuses: Vec<SharedStatus> = {
+        let state = app.state::<ImmersiveState>();
+        let runners = state.runners.lock().unwrap();
+        for r in runners.iter() {
+            let _ = r.stop.send(true);
+        }
+        runners.iter().map(|r| r.status.clone()).collect()
     };
-    preload.extend(translate::glossary(cfg));
-    let cfg = json!({
-        "enabled": show,
-        "skipCjk": target_lang.to_ascii_lowercase().starts_with("zh"),
-        "skipSelectors": target.skip_selectors,
-        "preload": preload,
-    });
-    SCRIPT.replacen(CONFIG_SLOT, &cfg.to_string(), 1)
-}
-
-fn frame_ids(tree: &Value, out: &mut Vec<String>) {
-    if let Some(id) = tree.pointer("/frame/id").and_then(Value::as_str) {
-        out.push(id.to_string());
-    }
-    for child in tree.get("childFrames").and_then(Value::as_array).into_iter().flatten() {
-        frame_ids(child, out);
+    for _ in 0..15 {
+        if statuses.iter().all(|s| s.lock().unwrap().pages.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// 接管一个页面目标，直到它关闭或连接断开
-async fn session(t: &TargetInfo, target: &ImmersiveTarget, mut show: watch::Receiver<bool>) -> Result<(), String> {
-    let (cdp, mut events) = cdp::connect(&t.ws).await?;
-    let script = build_script(&config::load()?, target, *show.borrow());
+pub(crate) fn status_of(app: &AppHandle, port: u16) -> Option<SharedStatus> {
+    let state = app.state::<ImmersiveState>();
+    let runners = state.runners.lock().unwrap();
+    runners.iter().find(|r| r.cfg.port == port).map(|r| r.status.clone())
+}
 
-    cdp.call("Runtime.enable", json!({})).await?;
-    cdp.call("Page.enable", json!({})).await?;
-    cdp.call("Runtime.addBinding", json!({ "name": BINDING, "executionContextName": WORLD }))
-        .await?;
-    // 以后每次加载新文档都自动注入（刷新、跳转）
-    cdp.call(
-        "Page.addScriptToEvaluateOnNewDocument",
-        json!({ "source": script, "worldName": WORLD }),
-    )
-    .await?;
-    // 当前已加载的文档：给每个框架建隔离环境并注入一次
-    let mut frames = Vec::new();
-    frame_ids(&cdp.call("Page.getFrameTree", json!({})).await?["frameTree"], &mut frames);
-    for frame in frames {
-        let world = cdp
-            .call("Page.createIsolatedWorld", json!({ "frameId": frame, "worldName": WORLD }))
-            .await;
-        if let Some(ctx) = world.ok().and_then(|w| w["executionContextId"].as_i64()) {
-            let r = cdp
-                .call("Runtime.evaluate", json!({ "expression": script, "contextId": ctx }))
-                .await;
-            if let Err(e) = r {
-                eprintln!("沉浸模式：注入框架 {frame} 失败：{e}");
+// ───────────────────────── 守护任务 ─────────────────────────
+
+enum Probe {
+    Ready,
+    Other(State, String),
+}
+
+/// 探测应用当前情况（含身份校验）。会枚举进程，放在阻塞线程里跑
+fn probe(t: &ImmersiveTarget) -> Probe {
+    let exe = PathBuf::from(t.exe.trim());
+    match procs::port_owner(t.port) {
+        Some(pid) => {
+            if t.exe.trim().is_empty() {
+                return Probe::Ready; // 没配程序路径：无法校验，按端口接管
+            }
+            match procs::exe_path(pid) {
+                Some(p) if procs::same_path(&p, &exe) => Probe::Ready,
+                Some(p) => Probe::Other(
+                    State::Conflict,
+                    format!("调试端口 {} 被其他程序占用（{}），已拒绝接管", t.port, p.display()),
+                ),
+                None => Probe::Other(
+                    State::Conflict,
+                    format!("调试端口 {} 被无法识别的进程（{pid}）占用，已拒绝接管", t.port),
+                ),
             }
         }
+        None if !t.exe.trim().is_empty() && !procs::pids_of(&exe).is_empty() => Probe::Other(
+            State::NoPort,
+            "正在运行，但不是以沉浸模式启动的（没有开调试端口）".into(),
+        ),
+        None => Probe::Other(State::NotRunning, "未运行".into()),
     }
-    println!("沉浸模式：已接管页面 {}", t.url);
+}
 
-    // 我们的隔离环境 id，用于切换原文/译文时逐个通知
-    let mut contexts: HashSet<i64> = HashSet::new();
+async fn supervise(
+    app: AppHandle,
+    t: ImmersiveTarget,
+    show: watch::Receiver<bool>,
+    mut stop: watch::Receiver<bool>,
+    status: SharedStatus,
+) {
+    let mut announced = false;
     loop {
-        tokio::select! {
-            ev = events.recv() => {
-                let Some(ev) = ev else { break };
-                match ev.method.as_str() {
-                    "Runtime.bindingCalled" if ev.params["name"] == BINDING => {
-                        let ctx = ev.params["executionContextId"].as_i64().unwrap_or(0);
-                        contexts.insert(ctx);
-                        let payload = ev.params["payload"].as_str().unwrap_or("").to_string();
-                        tauri::async_runtime::spawn(answer(cdp.clone(), ctx, payload));
+        if *stop.borrow() {
+            break;
+        }
+        let tc = t.clone();
+        let probed = tauri::async_runtime::spawn_blocking(move || probe(&tc))
+            .await
+            .unwrap_or_else(|e| Probe::Other(State::NotRunning, e.to_string()));
+        match probed {
+            Probe::Ready => match session::list_targets(t.port).await {
+                Ok(list) => {
+                    if !announced {
+                        announced = true;
+                        println!("沉浸模式：已连上「{}」", t.name);
                     }
-                    "Runtime.executionContextCreated" => {
-                        let c = &ev.params["context"];
-                        if c["name"] == WORLD {
-                            if let Some(id) = c["id"].as_i64() {
-                                contexts.insert(id);
+                    let mut new_pages = Vec::new();
+                    {
+                        let mut s = status.lock().unwrap();
+                        s.waiting = None;
+                        for p in list.iter().filter(|p| session::wanted(p, &t)) {
+                            match s.pages.iter_mut().find(|x| x.id == p.id) {
+                                Some(x) => {
+                                    x.url = p.url.clone();
+                                    x.title = p.title.clone();
+                                }
+                                None => {
+                                    s.pages.push(PageInfo { id: p.id.clone(), url: p.url.clone(), title: p.title.clone() });
+                                    new_pages.push(p.clone());
+                                }
                             }
                         }
+                        s.state = State::Attached;
+                        s.message = if s.pages.is_empty() {
+                            "已连接，暂无可翻译的页面".into()
+                        } else {
+                            format!("已接管 {} 个页面", s.pages.len())
+                        };
                     }
-                    "Runtime.executionContextDestroyed" => {
-                        if let Some(id) = ev.params["executionContextId"].as_i64() {
-                            contexts.remove(&id);
-                        }
+                    for p in new_pages {
+                        let ctx = session::Ctx {
+                            app: app.clone(),
+                            target: t.clone(),
+                            show: show.clone(),
+                            stop: stop.clone(),
+                            patch: app.state::<ImmersiveState>().patch.subscribe(),
+                            status: status.clone(),
+                        };
+                        tauri::async_runtime::spawn(session::run(p, ctx));
                     }
-                    "Runtime.executionContextsCleared" => contexts.clear(),
-                    "Inspector.detached" | "Inspector.targetCrashed" => break,
-                    _ => {}
                 }
-            }
-            changed = show.changed() => {
-                if changed.is_err() {
-                    break;
+                Err(e) => {
+                    let mut s = status.lock().unwrap();
+                    s.state = State::Conflict;
+                    s.message = format!("调试端口 {} 已打开，但读取页面列表失败：{e}", t.port);
                 }
-                let on = *show.borrow_and_update();
-                for &ctx in &contexts {
-                    let expr = format!("globalThis.__tf && __tf.setEnabled({on})");
-                    let _ = cdp.call("Runtime.evaluate", json!({ "expression": expr, "contextId": ctx })).await;
+            },
+            Probe::Other(state, message) => {
+                if announced {
+                    announced = false;
+                    println!("沉浸模式：「{}」已断开", t.name);
+                }
+                let mut s = status.lock().unwrap();
+                match s.waiting.clone() {
+                    Some(w) => {
+                        s.state = State::Waiting;
+                        s.message = w;
+                    }
+                    None => {
+                        s.state = state;
+                        s.message = message;
+                    }
                 }
             }
         }
-    }
-    if !cdp.is_closed() {
-        println!("沉浸模式：页面 {} 已断开", t.url);
-    }
-    Ok(())
-}
-
-#[derive(Deserialize)]
-struct Request {
-    texts: Vec<String>,
-}
-
-/// 处理页面发来的一批原文：翻译（先查本地库）后回填
-async fn answer(cdp: cdp::Cdp, ctx: i64, payload: String) {
-    let Ok(req) = serde_json::from_str::<Request>(&payload) else { return };
-    let texts: Vec<String> = req.texts.into_iter().filter(|t| !t.trim().is_empty()).take(200).collect();
-    if texts.is_empty() {
-        return;
-    }
-    let expr = match config::load() {
-        Ok(cfg) => match translate::translate_batch_with_fallback(&cfg, &texts).await {
-            Ok((translated, engine)) => {
-                if engine != translate::CACHE_ENGINE {
-                    println!("沉浸模式：{} 条由【{engine}】翻译", texts.len());
-                }
-                let map: HashMap<&String, String> = texts.iter().zip(translated).collect();
-                format!("globalThis.__tf && __tf.receive({})", json!({ "map": map }))
-            }
-            Err(e) => {
-                eprintln!("沉浸模式：翻译失败：{e}");
-                format!("globalThis.__tf && __tf.failed({})", json!({ "texts": texts }))
-            }
-        },
-        Err(e) => {
-            eprintln!("{e}");
-            return;
+        notify(&app);
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
         }
-    };
-    let _ = cdp.call("Runtime.evaluate", json!({ "expression": expr, "contextId": ctx })).await;
+    }
 }

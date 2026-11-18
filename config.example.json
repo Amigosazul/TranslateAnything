@@ -15,7 +15,15 @@
     "enabled": true,
     "hotkey": "Alt+Shift+T",
     "targets": [
-      { "name": "reclaude 客户端", "port": 39222, "url_prefixes": [], "skip_selectors": [] }
+      {
+        "name": "reclaude 客户端",
+        "enabled": true,
+        "exe": "C:\\Users\\你的用户名\\.rec\\claude-app\\app\\claude.exe",
+        "args": "",
+        "port": 39222,
+        "url_prefixes": [],
+        "skip_selectors": []
+      }
     ]
   },
   "engines": {

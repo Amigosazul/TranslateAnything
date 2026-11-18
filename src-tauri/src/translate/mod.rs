@@ -171,21 +171,24 @@ pub const CACHE_ENGINE: &str = "本地缓存";
 /// 按整条原文精确匹配（忽略首尾空白），命中的不查库也不请求引擎。
 /// 传统翻译引擎翻单个界面词没有上下文，容易出"New → 新款""Auto → 汽车"这类错，靠它兜住。
 pub fn glossary(cfg: &Config) -> HashMap<String, String> {
-    static BUILTIN: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
     let mut map = HashMap::new();
     if cfg.builtin_glossary {
-        let builtin = BUILTIN.get_or_init(|| serde_json::from_str(include_str!("glossary.json")).unwrap_or_default());
-        let key = match primary(&cfg.target_lang).as_str() {
-            "zh" if is_traditional(&cfg.target_lang) => "zh-TW".to_string(),
-            "zh" => "zh-CN".to_string(),
-            p => p.to_string(),
-        };
-        if let Some(m) = builtin.get(&key) {
-            map.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
+        map.extend(builtin_glossary(&cfg.target_lang));
     }
     map.extend(cfg.glossary.iter().map(|(k, v)| (k.trim().to_string(), v.clone())));
     map
+}
+
+/// 某个目标语言的内置术语表（设置界面展示用）
+pub fn builtin_glossary(target_lang: &str) -> std::collections::BTreeMap<String, String> {
+    static BUILTIN: OnceLock<HashMap<String, std::collections::BTreeMap<String, String>>> = OnceLock::new();
+    let builtin = BUILTIN.get_or_init(|| serde_json::from_str(include_str!("glossary.json")).unwrap_or_default());
+    let key = match primary(target_lang).as_str() {
+        "zh" if is_traditional(target_lang) => "zh-TW".to_string(),
+        "zh" => "zh-CN".to_string(),
+        p => p.to_string(),
+    };
+    builtin.get(&key).cloned().unwrap_or_default()
 }
 
 /// 批量翻译：术语表 → 本地译文库 → 翻译引擎（主引擎 + 回退），引擎结果写回译文库。
