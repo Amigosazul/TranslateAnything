@@ -270,7 +270,16 @@ function nextFreePort(): number {
   return p;
 }
 
-const blankTarget = (): ImmersiveTarget => ({ name: "", enabled: true, exe: "", args: "", port: nextFreePort(), url_prefixes: [], skip_selectors: [] });
+const blankTarget = (): ImmersiveTarget => ({
+  name: "",
+  enabled: true,
+  exe: "",
+  args: "",
+  port: nextFreePort(),
+  url_prefixes: [],
+  skip_selectors: [],
+  auto_relaunch: true,
+});
 
 /** 应用表单：返回表单元素和读取结果的函数 */
 function appForm(d: ImmersiveTarget) {
@@ -306,6 +315,7 @@ function appForm(d: ImmersiveTarget) {
   prefixes.value = d.url_prefixes.join("\n");
   const skips = h("textarea", { rows: 2, placeholder: t("immersive.form.skipsPh") });
   skips.value = d.skip_selectors.join("\n");
+  const auto = h("input", { type: "checkbox", checked: d.auto_relaunch !== false });
   const lines = (v: string) => v.split("\n").map((s) => s.trim()).filter(Boolean);
   const form = h(
     "div",
@@ -313,6 +323,7 @@ function appForm(d: ImmersiveTarget) {
     field(t("immersive.form.name"), name),
     field(t("immersive.form.port"), port),
     field(t("immersive.form.exe"), exeBox, "wide"),
+    h("label", { class: "check wide" }, auto, t("immersive.form.autoRelaunch")),
     h(
       "details",
       { class: "pages wide" },
@@ -334,6 +345,7 @@ function appForm(d: ImmersiveTarget) {
     args: args.value.trim(),
     url_prefixes: lines(prefixes.value),
     skip_selectors: lines(skips.value),
+    auto_relaunch: auto.checked,
   });
   return { form, read };
 }

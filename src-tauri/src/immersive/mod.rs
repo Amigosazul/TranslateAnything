@@ -22,7 +22,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, watch};
 
@@ -282,6 +282,11 @@ pub(crate) fn status_of(app: &AppHandle, port: u16) -> Option<SharedStatus> {
 
 // ───────────────────────── 守护任务 ─────────────────────────
 
+/// 应用启动不超过这么久才自动重启；更早打开的可能已有用户数据，留给用户点"以沉浸模式重启"
+const AUTO_FRESH: Duration = Duration::from_secs(30);
+/// 两次自动重启的最小间隔
+const AUTO_COOLDOWN: Duration = Duration::from_secs(120);
+
 enum Probe {
     Ready,
     Other(State, String),
@@ -323,6 +328,8 @@ async fn supervise(
     status: SharedStatus,
 ) {
     let mut announced = false;
+    // 上次自动重启的时间：防止应用不认调试端口参数时反复重启
+    let mut last_auto: Option<Instant> = None;
     loop {
         if *stop.borrow() {
             break;
@@ -384,15 +391,42 @@ async fn supervise(
                     announced = false;
                     println!("沉浸模式：「{}」已断开", t.name);
                 }
-                let mut s = status.lock().unwrap();
-                match s.waiting.clone() {
-                    Some(w) => {
-                        s.state = State::Waiting;
-                        s.message = w;
+                let idle = {
+                    let mut s = status.lock().unwrap();
+                    match s.waiting.clone() {
+                        Some(w) => {
+                            s.state = State::Waiting;
+                            s.message = w;
+                            false
+                        }
+                        None => {
+                            s.state = state;
+                            s.message = message;
+                            true
+                        }
                     }
-                    None => {
-                        s.state = state;
-                        s.message = message;
+                };
+                // 用户直接打开了应用（没带调试端口）：趁它刚启动、还没有用户数据，自动重启成沉浸模式
+                if state == State::NoPort
+                    && idle
+                    && t.auto_relaunch
+                    && last_auto.is_none_or(|i| i.elapsed() > AUTO_COOLDOWN)
+                {
+                    let exe = PathBuf::from(t.exe.trim());
+                    let fresh = tauri::async_runtime::spawn_blocking(move || procs::main_process(&exe).and_then(procs::age))
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|a| a < AUTO_FRESH);
+                    if fresh {
+                        last_auto = Some(Instant::now());
+                        println!("沉浸模式：「{}」未带调试端口启动，自动重启", t.name);
+                        let (app, port, name) = (app.clone(), t.port, t.name.clone());
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = launch(&app, port, false).await {
+                                eprintln!("沉浸模式：自动重启「{name}」失败：{e}");
+                            }
+                        });
                     }
                 }
             }

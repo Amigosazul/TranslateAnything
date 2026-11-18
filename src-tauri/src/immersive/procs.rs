@@ -13,10 +13,14 @@ use windows::Win32::Networking::WinSock::AF_INET;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
+use windows::Win32::Foundation::{FILETIME, HWND, LPARAM, WPARAM};
+use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess,
 };
-use windows::core::PWSTR;
+use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE};
+use windows::core::{BOOL, PWSTR};
 
 /// 正在本机 127.0.0.1 / 0.0.0.0 上监听该 TCP 端口的进程 id
 pub fn port_owner(port: u16) -> Option<u32> {
@@ -143,6 +147,48 @@ pub fn main_process(exe: &Path) -> Option<u32> {
         .find(|pid| command_line(*pid).is_some_and(|c| !c.contains("--type=")))
 }
 
+/// 进程已运行多久（读不到返回 None）
+pub fn age(pid: u32) -> Option<std::time::Duration> {
+    let h = open(pid)?;
+    let ft = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let (mut created, mut a, mut b, mut c) = Default::default();
+    unsafe {
+        GetProcessTimes(h.0, &mut created, &mut a, &mut b, &mut c).ok()?;
+        let now = GetSystemTimeAsFileTime();
+        // FILETIME 单位是 100 纳秒
+        Some(std::time::Duration::from_nanos(ft(now).saturating_sub(ft(created)) * 100))
+    }
+}
+
+/// 请这些进程的顶层窗口关闭（等同点窗口的关闭按钮；带托盘的应用通常只是藏起来）
+pub fn close_windows(pids: &[u32]) {
+    unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let pids = unsafe { &*(lp.0 as *const Vec<u32>) };
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pids.contains(&pid) {
+            let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        }
+        true.into()
+    }
+    let list = pids.to_vec();
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&list as *const Vec<u32> as isize));
+    }
+}
+
+/// 强制结束这些进程
+pub fn terminate(pids: &[u32]) {
+    for &pid in pids {
+        unsafe {
+            if let Ok(h) = OpenProcess(PROCESS_TERMINATE, false, pid) {
+                let h = Handle(h);
+                let _ = TerminateProcess(h.0, 1);
+            }
+        }
+    }
+}
+
 /// 去掉命令行开头的程序路径（可能带引号）和已有的调试端口参数，只留参数部分
 pub fn args_of(cmdline: &str) -> String {
     let c = cmdline.trim();
@@ -214,6 +260,19 @@ mod tests {
         assert!(same_path(&exe_path(pid).unwrap(), &me));
         assert!(command_line(pid).unwrap().len() > 3);
         assert!(pids_of(&me).contains(&pid));
+    }
+
+    #[test]
+    fn 运行时长与强制结束() {
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(age(pid).unwrap() < std::time::Duration::from_secs(10));
+        terminate(&[pid]);
+        assert_eq!(child.wait().unwrap().code(), Some(1));
     }
 
     #[test]

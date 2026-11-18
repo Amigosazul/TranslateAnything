@@ -13,6 +13,7 @@ export interface ImmersiveTarget {
   port: number;
   url_prefixes: string[];
   skip_selectors: string[];
+  auto_relaunch: boolean;
 }
 
 export interface ProviderConfig {

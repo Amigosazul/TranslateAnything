@@ -2,8 +2,11 @@
 //!
 //! 目标应用（比如 Claude 客户端）通常由别的程序带着一组自己的参数启动（代理、用户数据目录……），
 //! 我们不自己拼参数，而是：应用在运行时读出它主进程的完整命令行记进配置，
-//! 等用户从托盘把它完全退出，再用同样的参数加上 `--remote-debugging-port` 重新打开。
+//! 把它退出，再用同样的参数加上 `--remote-debugging-port` 重新打开。
 //! Electron 应用是单实例的，不先退出的话新启动的进程会把参数转交给旧实例然后自己退出，端口开不起来。
+//!
+//! 退出方式：先请窗口关闭，几秒内没退（带托盘的应用关窗口只是藏起来）就强制结束。
+//! 刚打开的应用（自动接管）里还没有用户数据，直接结束。
 
 use super::{State, notify, procs, status_of};
 use crate::config;
@@ -13,11 +16,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-/// 等用户退出应用的最长时间
-const WAIT_EXIT: Duration = Duration::from_secs(300);
+/// 请窗口关闭后等应用自己退出的时间，过后强制结束
+const GRACEFUL: Duration = Duration::from_secs(4);
+/// 强制结束后等进程消失的最长时间
+const WAIT_GONE: Duration = Duration::from_secs(10);
 
-/// 以沉浸模式启动（或重启）配置里端口为 `port` 的应用，返回给人看的结果
-pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
+/// 以沉浸模式启动（或重启）配置里端口为 `port` 的应用，返回给人看的结果。
+/// `graceful` 为 false 时不请窗口关闭，直接结束（用于刚打开就被自动接管的应用）
+pub async fn launch(app: &AppHandle, port: u16, graceful: bool) -> Result<String, String> {
     let cfg = config::load()?;
     let target = cfg
         .immersive
@@ -42,22 +48,14 @@ pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
             save_args(port, &args)?;
             let _ = app.emit("config-changed", ());
         }
-        set_waiting(app, port, Some(t!("status.wait_exit", name = target.name)));
-        let start = Instant::now();
-        loop {
-            let e = exe.clone();
-            if blocking(move || procs::main_process(&e)).await.is_none() {
-                break;
-            }
-            if start.elapsed() > WAIT_EXIT {
-                set_waiting(app, port, None);
-                return Err(t!("err.immersive.wait_timeout"));
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
+        set_waiting(app, port, Some(t!("status.closing", name = target.name)));
+        if let Err(e) = quit(&exe, graceful).await {
+            set_waiting(app, port, None);
+            return Err(e);
         }
         set_waiting(app, port, Some(t!("status.reopening")));
-        // 等子进程收尾、单实例锁释放
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // 等单实例锁释放
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     let args = config::load()?
@@ -72,6 +70,32 @@ pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
     set_waiting(app, port, None);
     r?;
     Ok(t!("status.launched", name = target.name))
+}
+
+/// 退出程序的所有进程：先请窗口关闭，没退就强制结束
+async fn quit(exe: &Path, graceful: bool) -> Result<(), String> {
+    let pids_now = |e: PathBuf| blocking(move || procs::pids_of(&e));
+    let wait_gone = async |limit: Duration| {
+        let start = Instant::now();
+        while start.elapsed() < limit {
+            if pids_now(exe.to_path_buf()).await.is_empty() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        false
+    };
+    if graceful {
+        let pids = pids_now(exe.to_path_buf()).await;
+        blocking(move || procs::close_windows(&pids)).await;
+        if wait_gone(GRACEFUL).await {
+            return Ok(());
+        }
+    }
+    // 子进程会随主进程退出，这里一起结束，免得残留进程占着单实例锁
+    let pids = pids_now(exe.to_path_buf()).await;
+    blocking(move || procs::terminate(&pids)).await;
+    if wait_gone(WAIT_GONE).await { Ok(()) } else { Err(t!("err.immersive.quit_failed")) }
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {

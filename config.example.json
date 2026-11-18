@@ -23,7 +23,8 @@
         "args": "",
         "port": 39222,
         "url_prefixes": [],
-        "skip_selectors": []
+        "skip_selectors": [],
+        "auto_relaunch": true
       }
     ]
   },
