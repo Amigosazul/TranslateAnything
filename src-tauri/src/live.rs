@@ -120,6 +120,7 @@ pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(),
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+    crate::commands::disable_transitions(&win);
     win.set_position(PhysicalPosition::new(x, y)).map_err(|e| e.to_string())?;
     win.set_size(PhysicalSize::new(w.max(MIN_W), h.max(MIN_H)))
         .map_err(|e| e.to_string())?;

@@ -30,6 +30,27 @@ pub struct Rect {
     h: u32,
 }
 
+/// 关闭窗口显示/隐藏时系统自带的位移 + 淡入淡出动画。
+/// 遮罩与翻译框需要原地无缝切换，带动画会看到边框先缩放淡出、再淡入，两者对不上。
+pub fn disable_transitions(win: &tauri::WebviewWindow) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::TRUE;
+        use windows::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute};
+        if let Ok(hwnd) = win.hwnd() {
+            let on = TRUE;
+            unsafe {
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_TRANSITIONS_FORCEDISABLED,
+                    &on as *const _ as _,
+                    std::mem::size_of_val(&on) as u32,
+                );
+            }
+        }
+    }
+}
+
 /// 快捷键触发：在光标所在显示器上打开框选遮罩
 pub fn open_overlay(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(OVERLAY_LABEL).is_some() {
@@ -52,6 +73,7 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), String> {
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+    disable_transitions(&win);
     // 先定位再设尺寸，避免跨 DPI 显示器时尺寸被系统换算
     win.set_position(PhysicalPosition::new(x, y)).map_err(|e| e.to_string())?;
     win.set_size(PhysicalSize::new(w, h)).map_err(|e| e.to_string())?;
