@@ -1,9 +1,10 @@
-//! Windows 进程工具：端口归属、进程路径与命令行、识别 Electron 应用。
+//! Windows 进程工具：端口归属、进程路径与命令行、识别可接管的应用（Electron / CEF / WebView2）。
 //!
-//! 沉浸模式靠它做"身份校验"：调试端口背后的进程必须就是配置里的那个程序，
+//! 沉浸模式靠它做"身份校验"：调试端口背后的进程必须就是配置里的那个程序（或由它启动的浏览器进程），
 //! 否则（比如别的程序恰好占了同一端口）一律不接管。
 
-use std::collections::BTreeMap;
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS};
@@ -106,8 +107,8 @@ pub fn command_line(pid: u32) -> Option<String> {
     }
 }
 
-/// 所有进程（pid, 进程名）
-fn processes() -> Vec<(u32, String)> {
+/// 所有进程（pid, 父进程 pid, 进程名）
+fn processes() -> Vec<(u32, u32, String)> {
     let mut out = Vec::new();
     unsafe {
         let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
@@ -116,11 +117,29 @@ fn processes() -> Vec<(u32, String)> {
         let mut ok = Process32FirstW(snap.0, &mut e).is_ok();
         while ok {
             let n = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
-            out.push((e.th32ProcessID, String::from_utf16_lossy(&e.szExeFile[..n])));
+            out.push((e.th32ProcessID, e.th32ParentProcessID, String::from_utf16_lossy(&e.szExeFile[..n])));
             ok = Process32NextW(snap.0, &mut e).is_ok();
         }
     }
     out
+}
+
+/// 监听调试端口的进程 `pid` 是否属于程序 `exe`：就是它本身，或由它启动（沿父进程链往上找几层）。
+/// Electron 和多数 CEF 应用由主进程自己监听；WebView2 应用监听端口的是它启动的 `msedgewebview2.exe`，
+/// Steam 这类把 CEF 放在辅助进程里的也一样
+pub fn owned_by(pid: u32, exe: &Path) -> bool {
+    let parent: HashMap<u32, u32> = processes().into_iter().map(|(p, pp, _)| (p, pp)).collect();
+    let mut cur = pid;
+    for _ in 0..4 {
+        if exe_path(cur).is_some_and(|p| same_path(&p, exe)) {
+            return true;
+        }
+        match parent.get(&cur) {
+            Some(&pp) if pp != 0 && pp != cur => cur = pp,
+            _ => break,
+        }
+    }
+    false
 }
 
 /// 路径比较：不区分大小写、统一斜杠
@@ -134,9 +153,9 @@ pub fn pids_of(exe: &Path) -> Vec<u32> {
     let Some(name) = exe.file_name().map(|n| n.to_string_lossy().to_lowercase()) else { return Vec::new() };
     processes()
         .into_iter()
-        .filter(|(_, n)| n.to_lowercase() == name)
-        .filter(|(pid, _)| exe_path(*pid).is_some_and(|p| same_path(&p, exe)))
-        .map(|(pid, _)| pid)
+        .filter(|(_, _, n)| n.to_lowercase() == name)
+        .filter(|(pid, _, _)| exe_path(*pid).is_some_and(|p| same_path(&p, exe)))
+        .map(|(pid, _, _)| pid)
         .collect()
 }
 
@@ -208,36 +227,143 @@ pub fn args_of(cmdline: &str) -> String {
 /// 程序目录看起来是 Electron 应用（带 asar 资源包和 Chromium 资源）
 pub fn is_electron(exe: &Path) -> bool {
     let Some(dir) = exe.parent() else { return false };
-    let res = dir.join("resources");
-    (res.join("app.asar").exists() || res.join("app").join("package.json").exists())
-        && (dir.join("resources.pak").exists() || dir.join("chrome_100_percent.pak").exists())
+    let electron_dir = |d: &Path| {
+        let res = d.join("resources");
+        (res.join("app.asar").exists() || res.join("app").join("package.json").exists())
+            && (d.join("resources.pak").exists() || d.join("chrome_100_percent.pak").exists())
+    };
+    // 新版 VS Code 把资源放在以提交号命名的子目录里（Microsoft VS Code\df53daabb1\resources\app）
+    electron_dir(dir)
+        || std::fs::read_dir(dir).is_ok_and(|rd| {
+            rd.flatten().filter(|e| e.path().is_dir()).any(|e| electron_dir(&e.path()))
+        })
 }
 
-/// 正在运行的 Electron 应用：程序路径 → 是否已开着调试端口（端口号）
-pub fn running_electron_apps() -> BTreeMap<PathBuf, Option<u16>> {
-    let me = std::env::current_exe().ok();
-    let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
-    for (pid, name) in processes() {
-        if !name.to_lowercase().ends_with(".exe") {
-            continue;
-        }
-        if let Some(p) = exe_path(pid) {
-            seen.entry(p.to_string_lossy().to_lowercase()).or_insert(p);
+/// 可接管的应用类型（都基于 Chromium，走同一套 CDP 通道，区别只在怎么带上调试端口）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// 命令行参数 `--remote-debugging-port`
+    Electron,
+    /// 多数也认命令行参数；把 CEF 放在辅助进程里的（如 Steam）参数传不过去
+    Cef,
+    /// 系统共用的 WebView2 运行时：参数要通过环境变量 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 传给浏览器进程
+    WebView2,
+}
+
+/// 程序目录带 CEF 运行库
+fn is_cef(exe: &Path) -> bool {
+    exe.parent().is_some_and(|d| d.join("libcef.dll").exists())
+}
+
+/// 程序用 WebView2：目录里有加载器，或程序本身静态链接了加载器（Tauri、Wails 等），
+/// 后者在程序文件里找加载器要用的 `EmbeddedBrowserWebView.dll` 字样（ASCII 或 UTF-16）
+fn is_webview2(exe: &Path) -> bool {
+    // 加载器可能放在程序目录或其下一级；.NET 程序（WPF / WinForms）带的是 Microsoft.Web.WebView2.Core.dll
+    let loader = |d: &Path| d.join("WebView2Loader.dll").exists() || d.join("Microsoft.Web.WebView2.Core.dll").exists();
+    if let Some(dir) = exe.parent() {
+        if loader(dir) || std::fs::read_dir(dir).is_ok_and(|rd| rd.flatten().any(|e| e.path().is_dir() && loader(&e.path()))) {
+            return true;
         }
     }
-    let mut out = BTreeMap::new();
-    for p in seen.into_values() {
-        if me.as_ref().is_some_and(|m| same_path(m, &p)) || !is_electron(&p) {
+    // 只看合理大小的程序文件，避免把大型程序整个读进内存
+    const MAX: u64 = 256 * 1024 * 1024;
+    if std::fs::metadata(exe).map_or(true, |m| m.len() > MAX) {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(exe) else { return false };
+    let ascii = b"EmbeddedBrowserWebView";
+    let wide: Vec<u8> = ascii.iter().flat_map(|&b| [b, 0]).collect();
+    contains(&bytes, ascii) || contains(&bytes, &wide)
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// 判断程序属于哪一类；都不是返回 None
+pub fn detect_kind(exe: &Path) -> Option<Kind> {
+    if is_electron(exe) {
+        Some(Kind::Electron)
+    } else if is_cef(exe) {
+        Some(Kind::Cef)
+    } else if is_webview2(exe) {
+        Some(Kind::WebView2)
+    } else {
+        None
+    }
+}
+
+/// 命令行里的调试端口
+fn port_in(cmdline: &str) -> Option<u16> {
+    cmdline
+        .split([' ', '"'])
+        .find_map(|a| a.strip_prefix("--remote-debugging-port="))
+        .and_then(|s| s.parse().ok())
+}
+
+/// CEF 的辅助进程、崩溃上报等，不是用户打开的那个程序
+fn cef_helper(exe: &Path) -> bool {
+    let n = exe.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    ["helper", "subprocess", "crashpad", "renderer", "gpu", "service"].iter().any(|k| n.contains(k))
+}
+
+/// 系统自带的程序（资源管理器、开始菜单、小组件等也用 WebView2），不列出来
+fn system_program(exe: &Path) -> bool {
+    let windir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()).to_lowercase();
+    exe.to_string_lossy().to_lowercase().starts_with(&windir)
+}
+
+/// 正在运行、可以接管的应用：程序路径 →（类型，已开着的调试端口）
+pub fn running_apps() -> BTreeMap<PathBuf, (Kind, Option<u16>)> {
+    let me = std::env::current_exe().ok();
+    let procs = processes();
+    let mine = |p: &Path| me.as_ref().is_some_and(|m| same_path(m, p));
+    let mut out: BTreeMap<PathBuf, (Kind, Option<u16>)> = BTreeMap::new();
+
+    // WebView2：浏览器主进程（命令行不带 --type=）的父进程就是宿主程序，端口参数也在浏览器主进程上
+    let path_of: HashMap<u32, PathBuf> = procs
+        .iter()
+        .filter(|(_, _, n)| n.to_lowercase().ends_with(".exe"))
+        .filter_map(|(pid, _, _)| exe_path(*pid).map(|p| (*pid, p)))
+        .collect();
+    for (pid, ppid, name) in &procs {
+        if !name.eq_ignore_ascii_case("msedgewebview2.exe") {
             continue;
         }
-        let port = main_process(&p)
-            .and_then(command_line)
-            .and_then(|c| {
-                c.split(' ')
-                    .find_map(|a| a.strip_prefix("--remote-debugging-port=").map(str::to_string))
-            })
-            .and_then(|s| s.trim_matches('"').parse().ok());
-        out.insert(p, port);
+        let Some(cmd) = command_line(*pid).filter(|c| !c.contains("--type=")) else { continue };
+        let Some(host) = path_of.get(ppid) else { continue };
+        if mine(host) || system_program(host) {
+            continue;
+        }
+        let entry = out.entry(host.clone()).or_insert((Kind::WebView2, None));
+        entry.1 = entry.1.or(port_in(&cmd));
+    }
+
+    // Electron / CEF：程序目录特征 + 主进程（命令行不带 --type=）
+    let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for p in path_of.into_values() {
+        seen.entry(p.to_string_lossy().to_lowercase()).or_insert(p);
+    }
+    for p in seen.into_values() {
+        if mine(&p) || out.contains_key(&p) {
+            continue;
+        }
+        let kind = if is_electron(&p) {
+            Kind::Electron
+        } else if is_cef(&p) && !cef_helper(&p) {
+            Kind::Cef
+        } else {
+            continue;
+        };
+        let port = main_process(&p).and_then(command_line).and_then(|c| port_in(&c));
+        out.insert(p, (kind, port));
+    }
+    // 命令行带了端口不等于真开了（实测 NVIDIA App 不把参数交给 CEF），只报确实在监听、且属于该程序的
+    for (exe, (_, port)) in out.iter_mut() {
+        if port.is_some_and(|p| !port_owner(p).is_some_and(|pid| owned_by(pid, exe))) {
+            *port = None;
+        }
     }
     out
 }
@@ -273,6 +399,32 @@ mod tests {
         assert!(age(pid).unwrap() < std::time::Duration::from_secs(10));
         terminate(&[pid]);
         assert_eq!(child.wait().unwrap().code(), Some(1));
+    }
+
+    #[test]
+    fn 命令行里的调试端口() {
+        assert_eq!(port_in(r#""C:\a.exe" --x --remote-debugging-port=39301 --y"#), Some(39301));
+        assert_eq!(port_in(r#"msedgewebview2.exe --embedded-browser-webview=1 "--remote-debugging-port=9222""#), Some(9222));
+        assert_eq!(port_in("app.exe --lang=en"), None);
+    }
+
+    /// 本机实测：列出正在运行、可接管的应用。cargo test -- --ignored --nocapture 识别本机应用
+    #[test]
+    #[ignore]
+    fn 识别本机应用() {
+        for (exe, (kind, port)) in running_apps() {
+            println!("{kind:?}\t{port:?}\t{}", exe.display());
+        }
+        for exe in std::env::var("TA_KIND_PROBE").unwrap_or_default().split(';').filter(|s| !s.is_empty()) {
+            println!("detect_kind {exe} → {:?}", detect_kind(Path::new(exe)));
+        }
+    }
+
+    #[test]
+    fn 进程属于自身() {
+        let me = std::env::current_exe().unwrap();
+        assert!(owned_by(std::process::id(), &me));
+        assert!(!owned_by(std::process::id(), Path::new(r"C:\not\there.exe")));
     }
 
     #[test]

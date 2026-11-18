@@ -53,7 +53,13 @@ pub fn wanted(t: &TargetInfo, target: &ImmersiveTarget) -> bool {
         return false;
     }
     // 地址为空的多是还没导航的隐藏窗口（实测 Apifox 有两个），连上去 Runtime.enable 也不响应
-    if t.url.is_empty() || t.url.starts_with("devtools://") || t.url.starts_with("chrome") || t.url == "about:blank" {
+    // edge:// 是 WebView2 的内部页面
+    if t.url.is_empty()
+        || t.url.starts_with("devtools://")
+        || t.url.starts_with("chrome")
+        || t.url.starts_with("edge://")
+        || t.url == "about:blank"
+    {
         return false;
     }
     target.url_prefixes.is_empty() || target.url_prefixes.iter().any(|p| t.url.starts_with(p.as_str()))

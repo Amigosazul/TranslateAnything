@@ -300,8 +300,11 @@ fn probe(t: &ImmersiveTarget) -> Probe {
             if t.exe.trim().is_empty() {
                 return Probe::Ready; // 没配程序路径：无法校验，按端口接管
             }
+            // WebView2 应用监听端口的是它启动的 msedgewebview2.exe，要沿父进程链找到配置的程序
+            if procs::owned_by(pid, &exe) {
+                return Probe::Ready;
+            }
             match procs::exe_path(pid) {
-                Some(p) if procs::same_path(&p, &exe) => Probe::Ready,
                 Some(p) => Probe::Other(
                     State::Conflict,
                     t!("status.port_taken", port = t.port, path = p.display()),
