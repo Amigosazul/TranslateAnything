@@ -52,7 +52,8 @@ pub fn wanted(t: &TargetInfo, target: &ImmersiveTarget) -> bool {
     if !matches!(t.kind.as_str(), "page" | "iframe" | "webview") || t.ws.is_empty() {
         return false;
     }
-    if t.url.starts_with("devtools://") || t.url.starts_with("chrome") || t.url == "about:blank" {
+    // 地址为空的多是还没导航的隐藏窗口（实测 Apifox 有两个），连上去 Runtime.enable 也不响应
+    if t.url.is_empty() || t.url.starts_with("devtools://") || t.url.starts_with("chrome") || t.url == "about:blank" {
         return false;
     }
     target.url_prefixes.is_empty() || target.url_prefixes.iter().any(|p| t.url.starts_with(p.as_str()))
