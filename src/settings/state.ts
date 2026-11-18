@@ -74,6 +74,8 @@ export interface EngineInfo {
   official: boolean;
   fields: string[];
   note: string;
+  /** 接口地址留空时实际使用的地址；没有默认值的为空 */
+  default_base_url: string;
 }
 
 export interface StoreStats {

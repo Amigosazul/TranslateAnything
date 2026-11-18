@@ -7,7 +7,7 @@ use crate::config::ProviderConfig;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-const DEFAULT_BASE: &str = "https://translation.googleapis.com";
+pub(crate) const DEFAULT_BASE: &str = "https://translation.googleapis.com";
 
 pub struct Google {
     client: reqwest::Client,

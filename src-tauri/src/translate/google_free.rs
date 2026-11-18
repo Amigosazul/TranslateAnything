@@ -7,7 +7,7 @@ use crate::config::ProviderConfig;
 use async_trait::async_trait;
 use serde_json::Value;
 
-const DEFAULT_BASE: &str = "https://translate.googleapis.com";
+pub(crate) const DEFAULT_BASE: &str = "https://translate.googleapis.com";
 /// GET 请求的 URL 不宜过长
 const MAX_CHARS: usize = 5000;
 

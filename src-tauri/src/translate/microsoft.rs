@@ -7,7 +7,7 @@ use crate::config::ProviderConfig;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-const DEFAULT_BASE: &str = "https://api.cognitive.microsofttranslator.com";
+pub(crate) const DEFAULT_BASE: &str = "https://api.cognitive.microsofttranslator.com";
 
 pub struct Microsoft {
     client: reqwest::Client,

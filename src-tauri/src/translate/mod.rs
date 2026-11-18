@@ -71,6 +71,8 @@ pub struct EngineInfo {
     pub official: bool,
     /// 该引擎会用到的配置字段
     pub fields: &'static [&'static str],
+    /// 接口地址留空时实际使用的地址（DeepL 为付费版，免费版 key 以 `:fx` 结尾时改用免费版地址）；没有默认值的为空
+    pub default_base_url: &'static str,
     #[serde(serialize_with = "localized")]
     pub note: &'static str,
 }
@@ -86,6 +88,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["proxy"],
+        default_base_url: "",
         note: "engine.edge.note",
     },
     EngineInfo {
@@ -94,6 +97,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["proxy"],
+        default_base_url: "",
         note: "engine.bing.note",
     },
     EngineInfo {
@@ -102,6 +106,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["base_url", "proxy"],
+        default_base_url: google_free::DEFAULT_BASE,
         note: "engine.google_free.note",
     },
     EngineInfo {
@@ -110,6 +115,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["api_key", "region", "base_url", "proxy"],
+        default_base_url: microsoft::DEFAULT_BASE,
         note: "engine.microsoft.note",
     },
     EngineInfo {
@@ -118,6 +124,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["api_key", "base_url", "proxy"],
+        default_base_url: deepl::PRO_BASE,
         note: "engine.deepl.note",
     },
     EngineInfo {
@@ -126,6 +133,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: false,
         official: false,
         fields: &["base_url", "api_key", "proxy"],
+        default_base_url: deeplx::DEFAULT_URL,
         note: "engine.deeplx.note",
     },
     EngineInfo {
@@ -134,6 +142,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["api_key", "base_url", "proxy"],
+        default_base_url: google::DEFAULT_BASE,
         note: "engine.google.note",
     },
     EngineInfo {
@@ -142,6 +151,7 @@ pub const CATALOG: &[EngineInfo] = &[
         needs_key: true,
         official: true,
         fields: &["base_url", "api_key", "model", "proxy"],
+        default_base_url: "",
         note: "engine.openai.note",
     },
 ];
