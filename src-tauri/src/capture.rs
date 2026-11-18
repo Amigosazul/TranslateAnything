@@ -155,6 +155,60 @@ pub fn cursor_state() -> Option<(i32, i32, bool)> {
     }
 }
 
+/// 是否按着翻页类按键（PgUp/PgDn/方向上下/空格/Home/End）。只查询这几个键的当前状态，不记录任何输入。
+pub fn nav_key_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    [VK_PRIOR, VK_NEXT, VK_UP, VK_DOWN, VK_SPACE, VK_HOME, VK_END]
+        .iter()
+        .any(|k| unsafe { GetAsyncKeyState(k.0 as i32) } < 0)
+}
+
+/// 测试用：直接让指定窗口把自己画出来（窗口可以在后台被遮挡，不必切到前台）
+#[cfg(test)]
+pub fn capture_window(hwnd_raw: isize) -> Result<RgbaImage, String> {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    unsafe {
+        let hwnd = HWND(hwnd_raw as _);
+        let mut r = RECT::default();
+        GetWindowRect(hwnd, &mut r).map_err(|e| e.to_string())?;
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(Some(screen));
+        let bmp = CreateCompatibleBitmap(screen, w, h);
+        let old = SelectObject(dc, bmp.into());
+        let ok = PrintWindow(hwnd, dc, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        SelectObject(dc, old);
+        GetDIBits(dc, bmp, 0, h as u32, Some(buf.as_mut_ptr() as _), &mut info, DIB_RGB_COLORS);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        if !ok {
+            return Err("PrintWindow 失败".into());
+        }
+        for px in buf.chunks_exact_mut(4) {
+            px.swap(0, 2);
+            px[3] = 255;
+        }
+        RgbaImage::from_raw(w as u32, h as u32, buf).ok_or_else(|| "尺寸异常".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
