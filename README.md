@@ -54,6 +54,15 @@ node design/logo/build.mjs --apply
 - ✅ **管理界面**：系统托盘、设置窗口（按应用开关、身份校验、一键以沉浸模式启动、译文库查看与改译、术语表、常规设置）。
 - 🚧 **规划中**：翻译过滤（自动跳过代码、路径、品牌名等，判断带原因）、翻译引擎设置界面、无感启动、开机自启、可选的大模型引擎、多显示器。
 
+## 下载与平台
+
+到 [Releases](https://github.com/Richard2091/Translate-Anything/releases) 下载安装包。目前只支持 Windows 10/11：
+
+- Intel / AMD 处理器：文件名带 `x64` 的安装包（`.exe` 或 `.msi`）
+- 骁龙等 ARM 处理器：文件名带 `arm64` 的 `.exe`
+
+macOS / Linux 暂不支持，适配计划见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“多平台打包与发布”一节。
+
 ## 配置
 
 不写配置也能用（默认 `edge` 引擎免 key）。需要切换引擎、配置回退顺序或代理时，复制 [config.example.json](config.example.json) 到 `~/.translate-anything/config.json`（旧版的 `~/.translate-filter` 目录会在首次启动时自动迁移） 修改，字段说明见 [docs/02-技术方案.md](docs/02-技术方案.md) 的“翻译 Provider 抽象”一节。

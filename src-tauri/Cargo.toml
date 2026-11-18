@@ -2,7 +2,7 @@
 name = "translate-anything"
 version = "0.1.0"
 description = "随译——屏幕、软件界面随处可译"
-authors = ["李智谦"]
+authors = ["Richard"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
