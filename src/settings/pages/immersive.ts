@@ -23,9 +23,13 @@ import {
 interface DetectedApp {
   name: string;
   exe: string;
+  kind: "electron" | "cef" | "web_view2";
   port: number | null;
   configured: boolean;
 }
+
+/** 应用类型的显示名（产品名，不进语言文件） */
+const KIND_LABEL: Record<DetectedApp["kind"], string> = { electron: "Electron", cef: "CEF", web_view2: "WebView2" };
 
 /** 各状态的徽章色调；文字取 immersive.state.<状态> */
 const STATE_TONE: Record<StateName, string> = {
@@ -369,7 +373,7 @@ function appDialog(d: ImmersiveTarget, origPort: number | null, existing?: Dialo
   } else dlg = openDialog(title, form, actions, { wide: true });
 }
 
-/** 识别正在运行的 Electron 应用，选一个后在同一个对话框里补全信息 */
+/** 识别正在运行、可接管的应用（Electron / WebView2 / CEF），选一个后在同一个对话框里补全信息 */
 function detectDialog() {
   const body = h("div", { class: "detect" }, h("div", { class: "loading" }, h("span", { class: "spinner" }), t("immersive.detect.searching")));
   const manual = h("button", { class: "btn ghost", onclick: () => appDialog(blankTarget(), null, dlg) }, icon("plus"), t("immersive.addManually"));
@@ -399,7 +403,13 @@ function detectDialog() {
               h(
                 "div",
                 { class: "grow" },
-                h("div", { class: "row", style: "gap:8px" }, h("b", {}, a.name), a.port ? h("span", { class: "tag" }, t("immersive.detect.port", { port: a.port })) : null),
+                h(
+                  "div",
+                  { class: "row", style: "gap:8px" },
+                  h("b", {}, a.name),
+                  h("span", { class: "tag" }, KIND_LABEL[a.kind] ?? a.kind),
+                  a.port ? h("span", { class: "tag" }, t("immersive.detect.port", { port: a.port })) : null,
+                ),
                 h("div", { class: "path clip", title: a.exe }, a.exe),
               ),
               a.configured
