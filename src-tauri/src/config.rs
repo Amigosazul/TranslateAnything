@@ -176,14 +176,63 @@ const DATA_DIR: &str = ".translate-anything";
 /// 改名前（translate-filter 时期）的数据目录名，启动时自动迁移
 const LEGACY_DATA_DIR: &str = ".translate-filter";
 
-/// 用户数据目录 `~/.translate-anything`
+/// 便携模式标记文件名：程序同目录下有其中任一文件即为便携模式（带 `.txt` 是为了照顾在资源管理器里新建文本文件的用户）
+const PORTABLE_MARKERS: [&str; 2] = ["portable", "portable.txt"];
+/// 便携模式下数据目录相对程序所在目录的名字
+const PORTABLE_DATA_DIR: &str = "data";
+
+/// 便携模式的数据目录：程序同目录有标记文件时为 `<程序目录>\data`，否则 `None`
 ///
-/// 首次调用时：新目录不存在而旧目录 `~/.translate-filter` 存在，就把旧目录整个改名过来
+/// 目录建不出来（如被放进了只读位置）也返回 `None`，回退到用户目录并打日志，免得程序直接用不了。
+pub fn portable_dir() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+        if !PORTABLE_MARKERS.iter().any(|m| exe_dir.join(m).is_file()) {
+            return None;
+        }
+        let dir = exe_dir.join(PORTABLE_DATA_DIR);
+        match std::fs::create_dir_all(&dir) {
+            Ok(()) => Some(dir),
+            Err(e) => {
+                eprintln!("便携模式：无法创建数据目录 {}，改用用户目录：{e}", dir.display());
+                None
+            }
+        }
+    })
+    .clone()
+}
+
+/// 内嵌浏览器（WebView2）缓存目录：便携模式下放进数据目录，否则 `None`（用 Tauri 默认的 `%LOCALAPPDATA%\<identifier>`）
+pub fn webview_data_dir() -> Option<PathBuf> {
+    portable_dir().map(|d| d.join("webview"))
+}
+
+/// 给建窗口的 builder 用：便携模式下把 WebView2 缓存指到数据目录，所有窗口都要调，保证同一进程用同一个缓存目录
+pub trait PortableWebview {
+    fn portable_data(self) -> Self;
+}
+
+impl<'a, R: tauri::Runtime, M: tauri::Manager<R>> PortableWebview for tauri::WebviewWindowBuilder<'a, R, M> {
+    fn portable_data(self) -> Self {
+        match webview_data_dir() {
+            Some(d) => self.data_directory(d),
+            None => self,
+        }
+    }
+}
+
+/// 用户数据目录：便携模式为 `<程序目录>\data`（见 [`portable_dir`]），否则为 `~/.translate-anything`
+///
+/// 非便携模式首次调用时：新目录不存在而旧目录 `~/.translate-filter` 存在，就把旧目录整个改名过来
 /// （配置、译文库、术语表等原样保留）。改名失败（如旧版程序还开着、文件被占用）时继续用旧目录，
 /// 下次启动再试。
 pub fn data_dir() -> Option<PathBuf> {
     static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
+        if let Some(dir) = portable_dir() {
+            return Some(dir);
+        }
         let home = dirs::home_dir()?;
         let dir = home.join(DATA_DIR);
         let legacy = home.join(LEGACY_DATA_DIR);

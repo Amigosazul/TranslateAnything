@@ -17,6 +17,7 @@ use crate::input;
 use crate::layout::{self, Block};
 use crate::motion::{self, Frame};
 use crate::ocr;
+use crate::config::PortableWebview;
 use crate::translate;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -108,6 +109,7 @@ pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(),
     let state = app.state::<LiveState>();
     let label = format!("frame-{}", state.seq.fetch_add(1, Ordering::Relaxed) + 1);
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("frame.html".into()))
+        .portable_data()
         .title("随译")
         .decorations(false)
         .transparent(true)

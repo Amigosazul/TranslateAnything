@@ -1,6 +1,7 @@
 //! 框选遮罩相关命令
 
 use crate::capture::{self, MonitorRect};
+use crate::config::PortableWebview;
 use crate::{live, translate};
 use serde::Deserialize;
 use std::sync::Mutex;
@@ -34,6 +35,7 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), String> {
     *app.state::<AppState>().overlay_monitor.lock().unwrap() = Some(m);
 
     let win = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
+        .portable_data()
         .title("框选翻译区域")
         .decorations(false)
         .transparent(true)

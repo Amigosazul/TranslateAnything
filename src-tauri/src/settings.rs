@@ -1,6 +1,6 @@
 //! 设置窗口与它用到的命令：配置读写、沉浸模式管理、译文库与术语表管理
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, PortableWebview};
 use crate::immersive::{self, DetectedApp, TargetStatus};
 use crate::{store, translate};
 use serde::Serialize;
@@ -19,6 +19,7 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("settings.html".into()))
+        .portable_data()
         .title("随译 · 设置")
         .inner_size(1000.0, 720.0)
         .min_inner_size(760.0, 520.0)
