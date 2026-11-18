@@ -7,7 +7,7 @@
 <p align="center"><b>屏幕上的文字，随处可译。</b></p>
 
 <p align="center">
-  <a href="https://github.com/Richard2091/Translate-Anything/releases/latest"><img src="https://img.shields.io/github/v/release/Richard2091/Translate-Anything?label=%E4%B8%8B%E8%BD%BD&color=3d7bff" alt="下载"></a>
+  <a href="https://github.com/Richard2091/TranslateAnything/releases/latest"><img src="https://img.shields.io/github/v/release/Richard2091/TranslateAnything?label=%E4%B8%8B%E8%BD%BD&color=3d7bff" alt="下载"></a>
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%2010%20%2F%2011-27c6ec" alt="平台">
   <a href="LICENSE"><img src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-MIT-a3adc2" alt="许可证"></a>
 </p>
@@ -80,7 +80,7 @@
 
 ## 下载安装
 
-到 [Releases](https://github.com/Richard2091/Translate-Anything/releases/latest) 下载最新版本：
+到 [Releases](https://github.com/Richard2091/TranslateAnything/releases/latest) 下载最新版本：
 
 | 你的电脑 | 下载 |
 |---|---|
