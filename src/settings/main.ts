@@ -11,6 +11,7 @@ import { renderEngines } from "./pages/engines";
 import { buildLibrary, queryLibrary } from "./pages/library";
 import { glossaryDirty, renderGlossary, resetGlossaryDraft } from "./pages/glossary";
 import { renderGeneral } from "./pages/general";
+import { initI18n, isZh, t } from "../i18n";
 
 type Page = { render: (root: HTMLElement) => void; onShow?: () => Promise<unknown> | void };
 
@@ -130,6 +131,15 @@ setInterval(async () => {
 }, 2000);
 
 (async () => {
+  // 先载入界面文案，再绘制任何内容
+  try {
+    await initI18n();
+  } catch (e) {
+    console.error("界面文案载入失败", e);
+  }
+  // 英文界面下品牌名本身就是 Translate Anything，副标题重复，只在中文界面显示
+  const sub = document.querySelector<HTMLElement>(".brand-sub");
+  if (sub) sub.hidden = !isZh();
   try {
     await loadView();
     [S.statuses, S.catalog] = await Promise.all([
@@ -138,7 +148,7 @@ setInterval(async () => {
     ]);
     await switchTab("dashboard");
   } catch (e) {
-    rootOf("dashboard").replaceChildren(h("div", { class: "note bad" }, `读取设置失败：${errText(e)}`));
+    rootOf("dashboard").replaceChildren(h("div", { class: "note bad" }, t("settings.loadFailed", { error: errText(e) })));
     rootOf("dashboard").classList.add("active");
   }
   moveIndicator();

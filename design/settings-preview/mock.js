@@ -41,6 +41,14 @@
     { id: "openai", name: "大模型（OpenAI 兼容）", needs_key: true, official: true, fields: ["base_url", "api_key", "model", "proxy"], note: "任意 OpenAI 兼容服务" },
   ];
   const handlers = {
+    // 界面语言：地址加 ?lang=en 预览英文界面，缺的键按后端规则回退到英文
+    ui_i18n: async () => {
+      const lang = new URLSearchParams(location.search).get("lang") || "zh-CN";
+      const load = async (l) => (await fetch(`/src/i18n/${l}.json`)).json();
+      const en = await load("en");
+      const own = lang === "en" ? {} : await load(lang);
+      return { locale: lang, messages: { ...en, ...own }, locales: [["zh-CN", "简体中文"], ["en", "English"]] };
+    },
     settings_get: () => ({ config: JSON.parse(JSON.stringify(config)), config_path: "C:\\Users\\Demo\\.translate-anything\\config.json", db_path: "C:\\Users\\Demo\\.translate-anything\\translations.db", config_size: 1843, db_size: 2457600, db_custom: false, builtin_glossary: builtin }),
     engine_catalog: () => catalog,
     store_stats: () => ({ total: 8421, manual: 37, hits: 152390 }),

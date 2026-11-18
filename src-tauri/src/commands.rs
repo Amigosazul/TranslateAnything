@@ -36,7 +36,7 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), String> {
 
     let win = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay.html".into()))
         .portable_data()
-        .title("框选翻译区域")
+        .title(t!("window.select"))
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -68,7 +68,7 @@ pub fn select_cancel(app: AppHandle) {
 
 #[tauri::command]
 pub async fn select_done(app: AppHandle, _state: State<'_, AppState>, rect: Rect) -> Result<(), String> {
-    let m = close_overlay(&app).ok_or("框选会话已失效")?;
+    let m = close_overlay(&app).ok_or_else(|| t!("err.select.expired"))?;
     live::open_frame(&app, m.x + rect.x, m.y + rect.y, rect.w, rect.h)
 }
 

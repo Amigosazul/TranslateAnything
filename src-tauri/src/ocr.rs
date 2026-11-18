@@ -45,7 +45,7 @@ pub fn recognize(image: &RgbaImage, lang_pref: &str, target_lang: &str) -> Resul
     unsafe {
         let _ = RoInitialize(RO_INIT_MULTITHREADED);
     }
-    recognize_inner(image, lang_pref, target_lang).map_err(|e| format!("OCR 失败：{e}"))
+    recognize_inner(image, lang_pref, target_lang).map_err(|e| t!("err.ocr.failed", e = e))
 }
 
 /// 系统已安装的 OCR 语言：（语言标签，显示名），如 ("en-US", "English (United States)")
@@ -60,7 +60,7 @@ pub fn installed_languages() -> Result<Vec<(String, String)>, String> {
         }
         Ok(out)
     };
-    list().map_err(|e| format!("读取 OCR 语言失败：{e}"))
+    list().map_err(|e| t!("err.ocr.list", e = e))
 }
 
 fn recognize_inner(
@@ -120,7 +120,7 @@ fn create_engine(lang_pref: &str, target_lang: &str) -> windows::core::Result<(O
         if !OcrEngine::IsLanguageSupported(&lang)? {
             return Err(windows::core::Error::new(
                 windows::core::HRESULT(0x80004005u32 as i32),
-                format!("系统未安装 {pref} 的 OCR 语言包"),
+                t!("err.ocr.no_lang_pack", lang = pref),
             ));
         }
         return Ok((OcrEngine::TryCreateFromLanguage(&lang)?, pref.to_string()));

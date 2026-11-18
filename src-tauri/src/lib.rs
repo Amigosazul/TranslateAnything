@@ -1,3 +1,5 @@
+#[macro_use]
+mod i18n;
 mod capture;
 mod dialog;
 mod commands;
@@ -53,6 +55,7 @@ pub fn run() {
                 eprintln!("{e}\n使用默认配置");
                 config::Config::default()
             });
+            i18n::set_pref(&cfg.ui_lang);
             let hotkey = cfg.hotkey;
             if let Err(e) = app.global_shortcut().register(hotkey.as_str()) {
                 eprintln!("注册快捷键 {hotkey} 失败（可能被其他程序占用）：{e}");
@@ -83,6 +86,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            i18n::ui_i18n,
             commands::select_done,
             commands::select_cancel,
             commands::engine_catalog,

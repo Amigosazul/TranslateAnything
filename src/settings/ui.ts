@@ -1,4 +1,5 @@
 // 设置窗口通用小部件：元素构造、图标、开关、分段选择、提示与对话框
+import { fmtDate, fmtNum, locale, t } from "../i18n";
 
 export type Child = Node | string | null | undefined | false;
 
@@ -389,7 +390,7 @@ export function confirmDialog(title: string, body: Child, okText: string, danger
       title,
       body,
       [
-        h("button", { class: "btn", onclick: () => d.close() }, "取消"),
+        h("button", { class: "btn", onclick: () => d.close() }, t("common.cancel")),
         h("button", { class: `btn ${danger ? "solid-danger" : "primary"}`, onclick: () => ((result = true), d.close()) }, okText),
       ],
       { onClose: () => resolve(result) },
@@ -403,13 +404,15 @@ export function errText(e: unknown): string {
 
 export function relTime(sec: number): string {
   const d = Date.now() / 1000 - sec;
-  if (d < 60) return "刚刚";
-  if (d < 3600) return `${Math.floor(d / 60)} 分钟前`;
-  if (d < 86400) return `${Math.floor(d / 3600)} 小时前`;
-  if (d < 86400 * 30) return `${Math.floor(d / 86400)} 天前`;
-  return new Date(sec * 1000).toLocaleDateString("zh-CN");
+  if (d < 60) return t("common.justNow");
+  // “5 分钟前 / 5 minutes ago”交给 Intl 按界面语言生成
+  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "always" });
+  if (d < 3600) return rtf.format(-Math.floor(d / 60), "minute");
+  if (d < 86400) return rtf.format(-Math.floor(d / 3600), "hour");
+  if (d < 86400 * 30) return rtf.format(-Math.floor(d / 86400), "day");
+  return fmtDate(new Date(sec * 1000));
 }
 
 export const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
-export const fmt = (n: number) => n.toLocaleString("zh-CN");
+export const fmt = (n: number) => fmtNum(n);

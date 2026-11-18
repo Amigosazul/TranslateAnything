@@ -1,6 +1,7 @@
 // 设置窗口的数据：类型、全局状态、保存配置、翻译方式换算
 import { invoke } from "@tauri-apps/api/core";
 import { clone, errText, toast } from "./ui";
+import { langLabel, t } from "../i18n";
 
 // ───────────────────────── 类型 ─────────────────────────
 
@@ -35,6 +36,8 @@ export interface Config {
   builtin_glossary: boolean;
   glossary: Record<string, string>;
   immersive: { enabled: boolean; hotkey: string; targets: ImmersiveTarget[] };
+  /** 界面语言；空或缺省表示跟随系统 */
+  ui_lang?: string;
   [key: string]: unknown;
 }
 
@@ -124,7 +127,7 @@ export async function loadStats() {
 }
 
 /** 修改配置并保存；成功后重新读取并刷新界面 */
-export async function saveConfig(mutate: (c: Config) => void, okMsg = "已保存"): Promise<boolean> {
+export async function saveConfig(mutate: (c: Config) => void, okMsg: string = t("common.saved")): Promise<boolean> {
   const next = clone(S.view.config);
   mutate(next);
   try {
@@ -140,19 +143,16 @@ export async function saveConfig(mutate: (c: Config) => void, okMsg = "已保存
   }
 }
 
-export const LANGS: [string, string][] = [
-  ["zh-CN", "简体中文"],
-  ["zh-TW", "繁体中文"],
-  ["en", "英语"],
-  ["ja", "日语"],
-  ["ko", "韩语"],
-  ["fr", "法语"],
-  ["de", "德语"],
-  ["es", "西班牙语"],
-  ["ru", "俄语"],
-];
+/** 可选的目标语言标签；名称按界面语言现取（Intl.DisplayNames） */
+export const LANG_TAGS = ["zh-CN", "zh-TW", "en", "ja", "ko", "fr", "de", "es", "pt", "it", "ru"];
 
-export const langName = (tag: string) => LANGS.find(([v]) => v === tag)?.[1] ?? tag;
+// zh-CN / zh-TW 按地区显示是“中文（中国）”，改用文字标签显示成“简体中文 / 繁体中文”
+const DISPLAY_TAG: Record<string, string> = { "zh-CN": "zh-Hans", "zh-TW": "zh-Hant" };
+
+export const langName = (tag: string) => langLabel(DISPLAY_TAG[tag] ?? tag);
+
+/** [标签, 名称]；名称依赖界面语言，所以每次调用时现算 */
+export const langs = (): [string, string][] => LANG_TAGS.map((tag) => [tag, langName(tag)]);
 
 // ───────────────────────── 翻译方式 ─────────────────────────
 // 配置里只有"主用引擎 + 回退顺序"。界面上的"翻译方式"由主用引擎的类型推出来：

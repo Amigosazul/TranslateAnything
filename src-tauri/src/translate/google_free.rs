@@ -32,14 +32,16 @@ impl GoogleFree {
     }
 }
 
-const RATE_LIMITED: &str = "Google 免费接口被限流或要求人机验证，请稍后再试，或在配置中切换 provider.type";
+fn rate_limited() -> TranslateError {
+    TranslateError::Api(t!("err.engine.google_rate_limited"))
+}
 
 #[async_trait]
 impl Translator for GoogleFree {
     async fn translate(&self, text: &str, target_lang: &str) -> Result<String, TranslateError> {
         let text = merge_lines(text);
         if text.chars().count() > MAX_CHARS {
-            return Err(TranslateError::Api(format!("文本超过 {MAX_CHARS} 字，Google 免费接口无法处理")));
+            return Err(TranslateError::Api(t!("err.engine.too_long", max = MAX_CHARS)));
         }
         let tl = google_lang(target_lang);
         let url = reqwest::Url::parse_with_params(
@@ -55,7 +57,7 @@ impl Translator for GoogleFree {
                 ("q", text.as_str()),
             ],
         )
-        .map_err(|e| TranslateError::Config(format!("base_url 无效：{e}")))?;
+        .map_err(|e| TranslateError::Config(t!("err.engine.bad_base_url", e = e)))?;
 
         let resp = self
             .client
@@ -66,12 +68,12 @@ impl Translator for GoogleFree {
             .map_err(network_err)?;
         let status = resp.status();
         if status.as_u16() == 429 {
-            return Err(TranslateError::Api(RATE_LIMITED.into()));
+            return Err(rate_limited());
         }
         let raw = resp.text().await.map_err(network_err)?;
         let v: Value = serde_json::from_str(&raw).map_err(|_| {
             if raw.contains("sorry") || raw.contains("captcha") {
-                TranslateError::Api(RATE_LIMITED.into())
+                rate_limited()
             } else {
                 TranslateError::Api(format!("HTTP {status}：{}", raw.chars().take(200).collect::<String>()))
             }

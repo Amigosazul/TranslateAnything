@@ -25,13 +25,13 @@ pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
         .iter()
         .find(|t| t.port == port)
         .cloned()
-        .ok_or("找不到这个应用的配置")?;
+        .ok_or_else(|| t!("err.immersive.no_config"))?;
     let exe = PathBuf::from(target.exe.trim());
     if target.exe.trim().is_empty() || !exe.exists() {
-        return Err(format!("程序路径无效：{}", target.exe));
+        return Err(t!("err.immersive.bad_exe", path = target.exe));
     }
     if blocking(move || procs::port_owner(port)).await.is_some() {
-        return Ok("调试端口已经开着，无需重启".into());
+        return Ok(t!("status.port_already_open"));
     }
 
     let e = exe.clone();
@@ -42,7 +42,7 @@ pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
             save_args(port, &args)?;
             let _ = app.emit("config-changed", ());
         }
-        set_waiting(app, port, Some(format!("请从托盘菜单把「{}」完全退出（只关窗口不算），退出后会自动以沉浸模式重新打开", target.name)));
+        set_waiting(app, port, Some(t!("status.wait_exit", name = target.name)));
         let start = Instant::now();
         loop {
             let e = exe.clone();
@@ -51,11 +51,11 @@ pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
             }
             if start.elapsed() > WAIT_EXIT {
                 set_waiting(app, port, None);
-                return Err("等待超时：应用仍在运行，已取消".into());
+                return Err(t!("err.immersive.wait_timeout"));
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        set_waiting(app, port, Some("应用已退出，正在以沉浸模式重新打开……".into()));
+        set_waiting(app, port, Some(t!("status.reopening")));
         // 等子进程收尾、单实例锁释放
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -71,7 +71,7 @@ pub async fn launch(app: &AppHandle, port: u16) -> Result<String, String> {
     let r = spawn(&exe, &line);
     set_waiting(app, port, None);
     r?;
-    Ok(format!("已以沉浸模式启动「{}」", target.name))
+    Ok(t!("status.launched", name = target.name))
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -90,7 +90,7 @@ fn spawn(exe: &Path, args: &str) -> Result<(), String> {
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("启动失败：{e}"))
+        .map_err(|e| t!("err.immersive.launch", e = e))
 }
 
 fn save_args(port: u16, args: &str) -> Result<(), String> {

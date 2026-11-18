@@ -14,8 +14,11 @@ use std::path::PathBuf;
 pub struct Config {
     /// 全局快捷键，如 `Alt+T`（启动时读取，修改后需重启）
     pub hotkey: String,
-    /// 目标语言，如 `zh-CN`
+    /// 目标语言，如 `zh-CN`；首次启动时取系统语言
     pub target_lang: String,
+    /// 界面语言，如 `zh-CN`、`en`；留空 = 跟随系统（见 `i18n`）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ui_lang: String,
     /// 翻译模式：`ocr`（第一版只支持这个）/ `vision`（预留）
     pub mode: String,
     /// OCR 语言标签，如 `en-US`；`auto` 表示自动挑选
@@ -127,7 +130,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             hotkey: "Alt+T".into(),
-            target_lang: "zh-CN".into(),
+            target_lang: crate::i18n::default_target_lang(),
+            ui_lang: String::new(),
             mode: "ocr".into(),
             ocr_lang: "auto".into(),
             engine: "edge".into(),
@@ -256,13 +260,13 @@ pub fn config_path() -> Option<PathBuf> {
 
 /// 读取配置；文件不存在时返回默认配置（默认引擎免 key，开箱即用）
 pub fn load() -> Result<Config, String> {
-    let path = config_path().ok_or("无法定位用户目录")?;
+    let path = config_path().ok_or_else(|| t!("err.config.no_home"))?;
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
-        Err(e) => return Err(format!("读取配置文件失败：{}\n{e}", path.display())),
+        Err(e) => return Err(t!("err.config.read", path = path.display(), e = e)),
     };
-    serde_json::from_str(&text).map_err(|e| format!("配置文件格式错误：{}\n{e}", path.display()))
+    serde_json::from_str(&text).map_err(|e| t!("err.config.parse", path = path.display(), e = e))
 }
 
 /// 检查配置是否可以保存（端口重复等）
@@ -270,17 +274,17 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
     let mut ports = std::collections::HashSet::new();
     for t in &cfg.immersive.targets {
         if t.name.trim().is_empty() {
-            return Err("沉浸模式：应用名称不能为空".into());
+            return Err(t!("err.config.app_name_empty"));
         }
         if t.port < 1024 {
-            return Err(format!("沉浸模式：「{}」的调试端口必须在 1024 到 65535 之间", t.name));
+            return Err(t!("err.config.port_range", name = t.name));
         }
         if !ports.insert(t.port) {
-            return Err(format!("沉浸模式：调试端口 {} 被多个应用重复使用", t.port));
+            return Err(t!("err.config.port_dup", port = t.port));
         }
     }
     if cfg.target_lang.trim().is_empty() {
-        return Err("目标语言不能为空".into());
+        return Err(t!("err.config.target_lang_empty"));
     }
     Ok(())
 }
@@ -288,14 +292,14 @@ pub fn validate(cfg: &Config) -> Result<(), String> {
 /// 保存配置：先写临时文件再替换，写到一半出错不会损坏原文件
 pub fn save(cfg: &Config) -> Result<(), String> {
     validate(cfg)?;
-    let path = config_path().ok_or("无法定位用户目录")?;
+    let path = config_path().ok_or_else(|| t!("err.config.no_home"))?;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败：{e}"))?;
+        std::fs::create_dir_all(dir).map_err(|e| t!("err.config.mkdir", e = e))?;
     }
     let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).map_err(|e| format!("写入配置失败：{e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("替换配置文件失败：{e}"))
+    std::fs::write(&tmp, text).map_err(|e| t!("err.config.write", e = e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| t!("err.config.replace", e = e))
 }
 
 #[cfg(test)]
@@ -332,7 +336,7 @@ mod tests {
         let mut t = t;
         t.name = "另一个".into();
         cfg.immersive.targets.push(t);
-        assert!(validate(&cfg).unwrap_err().contains("重复"));
+        assert_eq!(validate(&cfg).unwrap_err(), t!("err.config.port_dup", port = 39222));
     }
 
     #[test]

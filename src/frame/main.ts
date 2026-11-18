@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScrollFollower } from "./scroll";
+import { initI18n, t } from "../i18n";
 
 interface Block {
   /** 物理像素，相对翻译框左上角 */
@@ -149,6 +150,19 @@ function kick() {
   if (!rafId) rafId = requestAnimationFrame(frameTick);
 }
 
+/** 最近一次版面：文案载入完成后据此补上状态提示 */
+let lastLayout: Layout | null = null;
+
+function updateStatus(layout: Layout) {
+  statusEl.className = layout.error ? "err" : layout.pending > 0 ? "busy" : "";
+  statusEl.title = [
+    layout.engine ? t("frame.engine", { name: layout.engine }) : "",
+    layout.pending > 0 ? t("frame.pending", { n: layout.pending }) : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function render(layout: Layout) {
   if (layout.epoch < minEpoch) return;
   if (layout.epoch !== epoch) follower.reset(layout.total);
@@ -179,18 +193,18 @@ function render(layout: Layout) {
   blocksEl.replaceChildren(frag);
   for (const [el, b] of toFit) fitText(el, b);
 
-  statusEl.className = layout.error ? "err" : layout.pending > 0 ? "busy" : "";
-  statusEl.title = [
-    layout.engine ? `引擎：${layout.engine}` : "",
-    layout.pending > 0 ? `待翻译 ${layout.pending} 段` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  lastLayout = layout;
+  updateStatus(layout);
   errorEl.textContent = layout.error ?? "";
   errorEl.hidden = !layout.error || !document.body.classList.contains("hover");
 }
 
 listen<Layout>("layout", (e) => render(e.payload));
+
+// 版面事件不等文案；先到的版面在文案载入后补上状态提示
+initI18n().then(() => {
+  if (lastLayout) updateStatus(lastLayout);
+});
 
 // 内容滚动：OCR 结果出来之前先整体平移现有译文
 listen<Shift>("shift", (e) => {
@@ -238,7 +252,7 @@ btnPause.addEventListener("click", () => {
   paused = !paused;
   document.body.classList.toggle("paused", paused);
   btnPause.textContent = paused ? "▶" : "❚❚";
-  btnPause.title = paused ? "继续实时翻译" : "暂停实时翻译";
+  btnPause.title = t(paused ? "frame.resume" : "frame.pause");
   invoke("frame_set_paused", { paused });
 });
 
@@ -246,7 +260,7 @@ btnOriginal.addEventListener("click", () => {
   showOriginal = !showOriginal;
   blocksEl.classList.toggle("hidden", showOriginal);
   btnOriginal.classList.toggle("on", showOriginal);
-  btnOriginal.title = showOriginal ? "显示译文" : "显示原文";
+  btnOriginal.title = t(showOriginal ? "frame.show_translation" : "frame.show_original");
 });
 
 document.getElementById("btn-close")!.addEventListener("click", () => win.close());

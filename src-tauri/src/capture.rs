@@ -18,7 +18,7 @@ pub struct MonitorRect {
 }
 
 pub fn monitor_at(x: i32, y: i32) -> Result<MonitorRect, String> {
-    let m = Monitor::from_point(x, y).map_err(|e| format!("找不到显示器：{e}"))?;
+    let m = Monitor::from_point(x, y).map_err(|e| t!("err.capture.no_monitor", e = e))?;
     let err = |e: xcap::XCapError| e.to_string();
     Ok(MonitorRect {
         x: m.x().map_err(err)?,
@@ -40,7 +40,7 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     if w == 0 || h == 0 {
-        return Err("截取区域为空".into());
+        return Err(t!("err.capture.empty_region"));
     }
     let (rw, rh) = (w as i32, h as i32);
     let own_pid = std::process::id();
@@ -88,7 +88,7 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
         }
     }
     if layers.is_empty() {
-        return Err("翻译框下面没有可截取的窗口".into());
+        return Err(t!("err.capture.no_window"));
     }
 
     // 2. 从下往上画到画布
@@ -131,13 +131,13 @@ pub fn capture_under(x: i32, y: i32, w: u32, h: u32) -> Result<(RgbaImage, i32, 
         let _ = DeleteDC(canvas_dc);
         ReleaseDC(None, screen);
         if lines == 0 {
-            return Err("读取截图像素失败".into());
+            return Err(t!("err.capture.read_pixels"));
         }
         for px in buf.chunks_exact_mut(4) {
             px.swap(0, 2);
             px[3] = 255;
         }
-        let image = RgbaImage::from_raw(w, h, buf).ok_or("截图尺寸异常")?;
+        let image = RgbaImage::from_raw(w, h, buf).ok_or_else(|| t!("err.capture.bad_size"))?;
         Ok((image, 0, 0))
     }
 }
@@ -199,13 +199,13 @@ pub fn capture_window(hwnd_raw: isize) -> Result<RgbaImage, String> {
         let _ = DeleteDC(dc);
         ReleaseDC(None, screen);
         if !ok {
-            return Err("PrintWindow 失败".into());
+            return Err(t!("err.capture.print_window"));
         }
         for px in buf.chunks_exact_mut(4) {
             px.swap(0, 2);
             px[3] = 255;
         }
-        RgbaImage::from_raw(w as u32, h as u32, buf).ok_or_else(|| "尺寸异常".into())
+        RgbaImage::from_raw(w as u32, h as u32, buf).ok_or_else(|| t!("err.capture.bad_size"))
     }
 }
 

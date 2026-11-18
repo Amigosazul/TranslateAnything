@@ -17,9 +17,7 @@ impl DeepLX {
     pub fn new(cfg: &ProviderConfig) -> Result<Self, TranslateError> {
         let url = cfg.base_url.trim().to_string();
         if url.is_empty() {
-            return Err(TranslateError::Config(
-                "deeplx 需要在 provider.base_url 填写自建服务地址，如 http://127.0.0.1:1188/translate".into(),
-            ));
+            return Err(TranslateError::Config(t!("err.engine.deeplx_url")));
         }
         Ok(Self {
             client: build_client(cfg)?,

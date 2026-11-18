@@ -234,7 +234,7 @@ async fn answer(cdp: cdp::Cdp, ctx_id: i64, payload: String, app: AppHandle, sta
             {
                 let mut s = status.lock().unwrap();
                 s.translated += texts.len() as u64;
-                if engine != translate::CACHE_ENGINE {
+                if engine != translate::cache_engine() {
                     s.engine_batches += 1;
                     println!("沉浸模式：{} 条由【{engine}】翻译", texts.len());
                 }

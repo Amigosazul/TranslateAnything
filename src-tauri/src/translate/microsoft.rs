@@ -20,7 +20,7 @@ impl Microsoft {
     pub fn new(cfg: &ProviderConfig) -> Result<Self, TranslateError> {
         let key = require_key(
             cfg,
-            "微软翻译需要在 Azure 创建 Translator 资源（免费层每月 200 万字符），并填写 key 与 region。",
+            &t!("err.engine.microsoft_key_hint"),
         )?;
         let base = cfg.base_url.trim().trim_end_matches('/');
         Ok(Self {

@@ -104,19 +104,19 @@ pub fn relocate(new_dir: &str) -> Result<PathBuf, String> {
     let mut cfg = crate::config::load()?;
     let new_dir = new_dir.trim();
     let target_dir = if new_dir.is_empty() {
-        crate::config::data_dir().ok_or("无法定位用户目录")?
+        crate::config::data_dir().ok_or_else(|| t!("err.config.no_home"))?
     } else {
         PathBuf::from(new_dir)
     };
-    let old = db_path().ok_or("无法定位译文库")?;
+    let old = db_path().ok_or_else(|| t!("err.store.no_path"))?;
     let new = target_dir.join(DB_FILE);
     if same_file(&old, &new) {
         return Ok(new);
     }
     if new.exists() {
-        return Err(format!("目标文件夹里已经有一个译文库：{}", new.display()));
+        return Err(t!("err.store.exists", path = new.display()));
     }
-    std::fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建文件夹：{e}"))?;
+    std::fs::create_dir_all(&target_dir).map_err(|e| t!("err.store.mkdir", e = e))?;
 
     let mut slot = STORE.lock().unwrap();
     if let Slot::Open(c) = &*slot {
@@ -151,8 +151,8 @@ fn move_file(from: &PathBuf, to: &PathBuf) -> Result<(), String> {
     if std::fs::rename(from, to).is_ok() {
         return Ok(());
     }
-    std::fs::copy(from, to).map_err(|e| format!("移动译文库失败：{e}"))?;
-    std::fs::remove_file(from).map_err(|e| format!("已复制到新位置，但删除旧文件失败：{e}"))
+    std::fs::copy(from, to).map_err(|e| t!("err.store.move", e = e))?;
+    std::fs::remove_file(from).map_err(|e| t!("err.store.remove_old", e = e))
 }
 
 fn now() -> i64 {
@@ -256,7 +256,7 @@ pub struct Page {
 }
 
 fn with_conn<T>(f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
-    with_db(f).ok_or("译文库无法打开")?.map_err(|e| format!("译文库操作失败：{e}"))
+    with_db(f).ok_or_else(|| t!("err.store.open"))?.map_err(|e| t!("err.store.op", e = e))
 }
 
 /// 分页查询：按最近使用排序；`keyword` 同时匹配原文和译文；`manual_only` 只看手工译文

@@ -17,7 +17,7 @@ pub struct Google {
 
 impl Google {
     pub fn new(cfg: &ProviderConfig) -> Result<Self, TranslateError> {
-        let key = require_key(cfg, "Google 需要在 Google Cloud 启用 Cloud Translation API 并创建 API key。")?;
+        let key = require_key(cfg, &t!("err.engine.google_key_hint"))?;
         let base = cfg.base_url.trim().trim_end_matches('/');
         let base = if base.is_empty() { DEFAULT_BASE } else { base };
         Ok(Self {

@@ -15,7 +15,7 @@ pub struct DeepL {
 
 impl DeepL {
     pub fn new(cfg: &ProviderConfig) -> Result<Self, TranslateError> {
-        let key = require_key(cfg, "DeepL 需要注册 DeepL API（免费版每月 50 万字符）获取 key。")?;
+        let key = require_key(cfg, &t!("err.engine.deepl_key_hint"))?;
         let base = cfg.base_url.trim().trim_end_matches('/');
         let base = if !base.is_empty() {
             base.to_string()

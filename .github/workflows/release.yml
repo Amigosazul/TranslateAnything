@@ -93,14 +93,25 @@ jobs:
           # 手动运行时不建 Release，只把安装包作为构建产物上传
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && 'v__VERSION__' || '' }}
           releaseName: Translate Anything v__VERSION__
+          # 发布说明一律上中文、下英文；发布前在网页上补充本版更新内容时也按此格式
           releaseBody: |
             随译 Translate Anything v__VERSION__
 
-            下载说明：
+            ## 下载说明
+
             - 大多数电脑（Intel / AMD 处理器）：下载文件名带 `x64` 的安装包
             - 骁龙等 ARM 处理器的 Windows 电脑：下载文件名带 `arm64` 的安装包
             - `.exe` 为常规安装程序，`.msi` 适合企业批量部署
             - `_portable.zip` 为便携版：解压即用，配置和译文库存在解压目录的 `data` 文件夹里，不写用户目录（需要系统自带的 WebView2，Windows 10/11 一般都有）
+
+            ---
+
+            ## Downloads
+
+            - Most PCs (Intel / AMD): get the installer with `x64` in its name
+            - ARM-based Windows PCs (e.g. Snapdragon): get the installer with `arm64` in its name
+            - `.exe` is the regular installer; `.msi` is for managed / bulk deployment
+            - `_portable.zip` is the portable version: unzip and run. Settings and translation memory stay in the `data` folder next to the program, nothing is written to your user folder (uses the system WebView2, which Windows 10/11 normally has)
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
@@ -114,7 +125,10 @@ jobs:
           $stage = "portable-stage/TranslateAnything"
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item "src-tauri/target/${{ matrix.target }}/release/translate-anything.exe" "$stage/TranslateAnything.exe"
-          Set-Content "$stage/portable" "随译 Translate Anything 便携版标记：有这个文件时，配置和译文库都保存在同目录的 data 文件夹。删掉它则改用用户目录。" -Encoding utf8
+          Set-Content "$stage/portable" -Encoding utf8 -Value @(
+            "随译 Translate Anything 便携版标记：有这个文件时，配置和译文库都保存在同目录的 data 文件夹。删掉它则改用用户目录。",
+            "Translate Anything portable marker: while this file exists, settings and translation memory are stored in the data folder next to the program. Delete it to use your user folder instead."
+          )
           $zip = "TranslateAnything_${ver}_${arch}_portable.zip"
           Compress-Archive -Path $stage -DestinationPath $zip -Force
           "PORTABLE_ZIP=$zip" >> $env:GITHUB_ENV

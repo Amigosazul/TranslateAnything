@@ -110,7 +110,7 @@ pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(),
     let label = format!("frame-{}", state.seq.fetch_add(1, Ordering::Relaxed) + 1);
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("frame.html".into()))
         .portable_data()
-        .title("随译")
+        .title(t!("app.name"))
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -353,7 +353,7 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
                         s.engine = Some(engine);
                     }
                     Err(e) => {
-                        s.error = Some(format!("翻译失败：\n{e}"));
+                        s.error = Some(t!("err.engine.failed", e = e));
                         s.failed_at = Some(Instant::now());
                     }
                 }

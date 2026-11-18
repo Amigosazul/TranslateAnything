@@ -17,7 +17,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     // 托盘用专门的透明底图标（笔画加粗，见 design/logo/tray.svg），深浅任务栏都能看清
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(tauri::include_image!("icons/tray.png"))
-        .tooltip("随译")
+        .tooltip(t!("app.name"))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu)
@@ -30,23 +30,23 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn short_state(s: &TargetStatus) -> &'static str {
-    match s.state {
-        State::Off => "总开关已关",
-        State::Disabled => "已停用",
-        State::NotRunning => "未运行",
-        State::NoPort => "未以沉浸模式启动",
-        State::Conflict => "端口冲突",
-        State::Waiting => "等待退出",
-        State::Attached if s.show => "显示译文",
-        State::Attached => "显示原文",
-    }
+fn short_state(s: &TargetStatus) -> String {
+    t!(match s.state {
+        State::Off => "tray.state.off",
+        State::Disabled => "tray.state.disabled",
+        State::NotRunning => "tray.state.not_running",
+        State::NoPort => "tray.state.no_port",
+        State::Conflict => "tray.state.conflict",
+        State::Waiting => "tray.state.waiting",
+        State::Attached if s.show => "tray.state.showing_translation",
+        State::Attached => "tray.state.showing_original",
+    })
 }
 
 fn build_menu(app: &AppHandle, list: &[TargetStatus]) -> tauri::Result<Menu<Wry>> {
     let hotkey = config::load().map(|c| c.hotkey).unwrap_or_default();
     let menu = Menu::new(app)?;
-    menu.append(&MenuItem::with_id(app, "select", format!("框选翻译\t{hotkey}"), true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "select", format!("{}\t{hotkey}", t!("tray.select")), true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
 
     let attached: Vec<_> = list.iter().filter(|s| s.state == State::Attached).collect();
@@ -54,26 +54,26 @@ fn build_menu(app: &AppHandle, list: &[TargetStatus]) -> tauri::Result<Menu<Wry>
     menu.append(&CheckMenuItem::with_id(
         app,
         "show",
-        "沉浸模式：显示译文",
+        t!("tray.show_translation"),
         !attached.is_empty(),
         showing,
         None::<&str>,
     )?)?;
     for s in list {
-        let text = format!("{}（{}）", s.name, short_state(s));
+        let text = t!("tray.target", name = s.name, state = short_state(s));
         let id = format!("target:{}", s.port);
         menu.append(&CheckMenuItem::with_id(app, id, text, s.state != State::Off, s.enabled, None::<&str>)?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "settings", t!("tray.settings"), true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", t!("tray.quit"), true, None::<&str>)?)?;
     Ok(menu)
 }
 
 /// 应用状态变化后更新托盘菜单
 pub fn refresh(app: &AppHandle, list: &[TargetStatus]) {
     let sig: Vec<_> = list.iter().map(|s| (s.port, &s.name, s.enabled, s.state, s.show)).collect();
-    let sig = format!("{sig:?}");
+    let sig = format!("{}{sig:?}", crate::i18n::locale());
     {
         let mut last = LAST.lock().unwrap();
         if *last == sig {
@@ -82,6 +82,7 @@ pub fn refresh(app: &AppHandle, list: &[TargetStatus]) {
         *last = sig;
     }
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let _ = tray.set_tooltip(Some(t!("app.name")));
     match build_menu(app, list) {
         Ok(menu) => {
             let _ = tray.set_menu(Some(menu));

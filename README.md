@@ -6,6 +6,8 @@
 
 <p align="center"><b>屏幕上的文字，随处可译。</b></p>
 
+<p align="center"><b>简体中文</b> · <a href="README.en.md">English</a></p>
+
 <p align="center">
   <a href="https://github.com/Richard2091/TranslateAnything/releases/latest"><img src="https://img.shields.io/github/v/release/Richard2091/TranslateAnything?label=%E4%B8%8B%E8%BD%BD&color=3d7bff" alt="下载"></a>
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%2010%20%2F%2011-27c6ec" alt="平台">
@@ -112,6 +114,7 @@
 - 视觉直译：大模型直接看图翻译
 - 无感启动、开机自启
 - 音频同声传译、语音转字幕
+- 更多界面语言（目前为简体中文和英文，界面语言默认跟随系统）
 - macOS / Linux 版本
 
 ## 参与开发
@@ -130,7 +133,7 @@ pnpm tauri dev
 | [docs/03-开发环境.md](docs/03-开发环境.md) | 工具链安装与验证 |
 | [design/logo/](design/logo/) | Logo 设计说明与生成脚本 |
 
-调整设置界面时可以不启动整个应用：`pnpm dev` 后打开 `http://localhost:1420/design/settings-preview/index.html`，用模拟数据在浏览器里预览。
+调整设置界面时可以不启动整个应用：`pnpm dev` 后打开 `http://localhost:1420/design/settings-preview/index.html`，用模拟数据在浏览器里预览（地址加 `?lang=en` 预览英文界面）。
 
 ## 许可证
 

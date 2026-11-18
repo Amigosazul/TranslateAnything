@@ -30,7 +30,7 @@ pub struct Event {
 pub async fn connect(ws_url: &str) -> Result<(Cdp, mpsc::UnboundedReceiver<Event>), String> {
     let (ws, _) = tokio_tungstenite::connect_async(ws_url)
         .await
-        .map_err(|e| format!("连接调试端口失败：{e}"))?;
+        .map_err(|e| t!("err.immersive.cdp_connect", e = e))?;
     let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
@@ -56,7 +56,10 @@ pub async fn connect(ws_url: &str) -> Result<(Cdp, mpsc::UnboundedReceiver<Event
             if let Some(id) = v.get("id").and_then(Value::as_u64) {
                 if let Some(waiter) = pending_r.lock().await.remove(&id) {
                     let r = match v.get("error") {
-                        Some(e) => Err(e.get("message").and_then(Value::as_str).unwrap_or("未知错误").to_string()),
+                        Some(e) => Err(e
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map_or_else(|| t!("err.immersive.unknown"), str::to_string)),
                         None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     let _ = waiter.send(r);
@@ -70,7 +73,7 @@ pub async fn connect(ws_url: &str) -> Result<(Cdp, mpsc::UnboundedReceiver<Event
         }
         // 连接断开：让所有等待中的调用失败
         for (_, w) in pending_r.lock().await.drain() {
-            let _ = w.send(Err("连接已断开".into()));
+            let _ = w.send(Err(t!("err.immersive.disconnected")));
         }
     });
 
@@ -83,13 +86,13 @@ impl Cdp {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
         let msg = json!({ "id": id, "method": method, "params": params }).to_string();
-        self.tx.send(Message::text(msg)).map_err(|_| "连接已断开".to_string())?;
+        self.tx.send(Message::text(msg)).map_err(|_| t!("err.immersive.disconnected"))?;
         match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
-            Ok(Ok(r)) => r.map_err(|e| format!("{method}：{e}")),
-            Ok(Err(_)) => Err("连接已断开".into()),
+            Ok(Ok(r)) => r.map_err(|e| t!("err.immersive.cdp_call", method = method, e = e)),
+            Ok(Err(_)) => Err(t!("err.immersive.disconnected")),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                Err(format!("{method}：响应超时"))
+                Err(t!("err.immersive.cdp_timeout", method = method))
             }
         }
     }

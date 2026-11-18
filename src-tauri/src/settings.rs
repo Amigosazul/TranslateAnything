@@ -20,7 +20,7 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
     }
     WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("settings.html".into()))
         .portable_data()
-        .title("随译 · 设置")
+        .title(t!("window.settings", app = t!("app.name")))
         .inner_size(1000.0, 720.0)
         .min_inner_size(760.0, 520.0)
         .center()
@@ -65,14 +65,23 @@ pub fn settings_save(app: AppHandle, mut config: Config) -> Result<(), String> {
     // 译文库位置只能通过 store_relocate 修改（要连同文件一起搬），这里沿用磁盘上的值
     config.store_dir = config::load().map(|c| c.store_dir).unwrap_or_default();
     config::save(&config)?;
+    apply_ui_lang(&app, &config.ui_lang);
     immersive::reload(&app);
     Ok(())
+}
+
+/// 界面语言变了：重建托盘菜单，并通知各窗口重新载入文案
+pub fn apply_ui_lang(app: &AppHandle, pref: &str) {
+    if crate::i18n::set_pref(pref) {
+        crate::tray::refresh(app, &immersive::statuses(app));
+        let _ = app.emit("locale-changed", crate::i18n::locale());
+    }
 }
 
 /// 单独开关某个应用
 pub fn set_target_enabled(app: &AppHandle, port: u16, enabled: bool) -> Result<(), String> {
     let mut cfg = config::load()?;
-    let t = cfg.immersive.targets.iter_mut().find(|t| t.port == port).ok_or("找不到这个应用")?;
+    let t = cfg.immersive.targets.iter_mut().find(|t| t.port == port).ok_or_else(|| t!("err.immersive.app_not_found"))?;
     t.enabled = enabled;
     config::save(&cfg)?;
     immersive::reload(app);
@@ -115,7 +124,7 @@ pub fn store_query(keyword: String, manual_only: bool, offset: i64, limit: i64) 
 #[tauri::command]
 pub fn store_set(app: AppHandle, source: String, target: String) -> Result<(), String> {
     if source.trim().is_empty() || target.trim().is_empty() {
-        return Err("原文和译文都不能为空".into());
+        return Err(t!("err.store.empty_pair"));
     }
     let lang = config::load()?.target_lang;
     store::set_manual(&lang, &source, &target)?;
@@ -201,8 +210,9 @@ pub async fn store_pick_and_relocate(app: AppHandle) -> Result<Option<String>, S
         .and_then(|w| w.hwnd().ok())
         .map_or(0, |h| h.0 as isize);
     let initial = store::db_dir();
+    let title = t!("dialog.pick_store_folder");
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        crate::dialog::pick_folder(owner, "选择译文库存放的文件夹", initial.as_deref())
+        crate::dialog::pick_folder(owner, &title, initial.as_deref())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -228,7 +238,7 @@ pub fn reveal_file(which: String) -> Result<(), String> {
         "store" => store::db_path(),
         _ => None,
     }
-    .ok_or("未知的文件")?;
+    .ok_or_else(|| t!("err.dialog.unknown_file"))?;
     crate::dialog::reveal(&path)
 }
 

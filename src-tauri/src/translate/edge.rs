@@ -87,18 +87,18 @@ impl Edge {
             let status = resp.status();
             let raw = resp.text().await.map_err(network_err)?;
             let v: Value = serde_json::from_str(&raw).map_err(|_| {
-                TranslateError::Api(format!("Bing 返回 HTTP {status}：{}", raw.chars().take(200).collect::<String>()))
+                TranslateError::Api(t!("err.engine.bing_http_body", status = status, body = raw.chars().take(200).collect::<String>()))
             })?;
             if v.get("statusCode").and_then(Value::as_i64) == Some(205) {
                 *BING_TOKEN.lock().unwrap() = None;
                 continue;
             }
             if !status.is_success() {
-                return Err(TranslateError::Api(format!("Bing 返回 HTTP {status}")));
+                return Err(TranslateError::Api(t!("err.engine.bing_http", status = status)));
             }
             return join_translations(&v);
         }
-        Err(TranslateError::Api("Bing token 反复失效".into()))
+        Err(TranslateError::Api(t!("err.engine.bing_token_expired")))
     }
 
     async fn bing_token(&self, force: bool) -> Result<BingToken, TranslateError> {
@@ -120,7 +120,7 @@ impl Edge {
         let host = resp.url().host_str().unwrap_or("cn.bing.com").to_string();
         let page = resp.text().await.map_err(network_err)?;
         let token = parse_bing_page(&page, host)
-            .ok_or_else(|| TranslateError::Api("无法从 Bing 翻译页面解析 token（页面结构可能已变化）".into()))?;
+            .ok_or_else(|| TranslateError::Api(t!("err.engine.bing_token_parse")))?;
         *BING_TOKEN.lock().unwrap() = Some(token.clone());
         Ok(token)
     }
@@ -193,7 +193,7 @@ impl Translator for Edge {
                 Ok(_) => {}
                 Err(edge_err) => {
                     return self.bing_all(&texts, &to).await.map_err(|bing_err| {
-                        TranslateError::Api(format!("Edge 接口：{edge_err}；Bing 网页回退：{bing_err}"))
+                        TranslateError::Api(t!("err.engine.edge_bing", edge = edge_err, bing = bing_err))
                     });
                 }
             }

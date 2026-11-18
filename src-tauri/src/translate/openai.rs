@@ -16,10 +16,10 @@ impl OpenAICompatible {
     pub fn new(cfg: &ProviderConfig) -> Result<Self, TranslateError> {
         let base = cfg.base_url.trim().trim_end_matches('/');
         if base.is_empty() {
-            return Err(TranslateError::Config("未填写 provider.base_url".into()));
+            return Err(TranslateError::Config(t!("err.engine.no_base_url")));
         }
         if cfg.model.trim().is_empty() {
-            return Err(TranslateError::Config("未填写 provider.model".into()));
+            return Err(TranslateError::Config(t!("err.engine.no_model")));
         }
         Ok(Self {
             client: build_client(cfg)?,

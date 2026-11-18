@@ -1,7 +1,8 @@
-// 常规：目标语言、译文库开关、文件位置（显示大小，译文库可搬家）
+// 常规：界面语言、目标语言、译文库开关、文件位置（显示大小，译文库可搬家）
 import { invoke } from "@tauri-apps/api/core";
-import { LANGS, S, cfg, loadStats, loadView, refresh, saveConfig } from "../state";
-import { confirmDialog, dropdown, errText, fileSize, h, icon, pageHead, section, switchEl, toast } from "../ui";
+import { S, cfg, langs, loadStats, loadView, refresh, saveConfig } from "../state";
+import { confirmDialog, dropdown, errText, fileSize, h, icon, pageHead, section, switchEl, toast, type IconName } from "../ui";
+import { t, uiLocales } from "../../i18n";
 
 let moving = false;
 
@@ -16,9 +17,9 @@ async function reveal(which: "config" | "store") {
 async function relocate(reset: boolean) {
   if (reset) {
     const ok = await confirmDialog(
-      "把译文库搬回默认位置？",
-      h("p", { class: "muted" }, "译文库文件会移动到数据目录，内容不变。"),
-      "搬回去",
+      t("general.resetConfirmTitle"),
+      h("p", { class: "muted" }, t("general.resetConfirmBody")),
+      t("general.resetConfirmOk"),
     );
     if (!ok) return;
   }
@@ -26,7 +27,7 @@ async function relocate(reset: boolean) {
   refresh();
   try {
     const path = reset ? await invoke<string>("store_reset_location") : await invoke<string | null>("store_pick_and_relocate");
-    if (path) toast("译文库已移动到新位置");
+    if (path) toast(t("general.storeMoved"));
   } catch (e) {
     toast(errText(e), true);
   } finally {
@@ -48,11 +49,11 @@ export function renderGeneral(root: HTMLElement) {
       h("div", { class: `control${auto ? " auto" : ""}` }, control),
     );
 
-  const fileRow = (label: string, path: string, size: number, note: string, ...actions: HTMLElement[]) =>
+  const fileRow = (ic: IconName, label: string, path: string, size: number, note: string, ...actions: HTMLElement[]) =>
     h(
       "div",
       { class: "file-row" },
-      h("span", { class: "file-icon" }, icon(label === "译文库" ? "db" : "sliders")),
+      h("span", { class: "file-icon" }, icon(ic)),
       h(
         "div",
         { class: "grow" },
@@ -64,48 +65,61 @@ export function renderGeneral(root: HTMLElement) {
     );
 
   root.replaceChildren(
-    pageHead("常规", "悬浮窗模式和沉浸模式共用这些设置。"),
+    pageHead(t("nav.general"), t("general.lead")),
     h(
       "div",
       { class: "card flush" },
       row(
-        "目标语言",
-        "译文统一翻译成这种语言。",
+        t("general.uiLang"),
+        t("general.uiLangDesc"),
         dropdown(
-          LANGS.map(([val, n]) => ({ value: val, label: n, hint: val })),
-          c.target_lang,
-          (val) => saveConfig((x) => (x.target_lang = val), "目标语言已更改"),
+          [{ value: "", label: t("general.uiLangSystem") }, ...uiLocales().map(([tag, name]) => ({ value: tag, label: name, hint: tag }))],
+          c.ui_lang ?? "",
+          // 保存后后端会发 locale-changed，窗口随之重新载入，所以不提示
+          (val) => saveConfig((x) => (x.ui_lang = val), ""),
           { width: "100%" },
         ),
       ),
       row(
-        "使用译文库",
-        "翻译过的文字存到本地，相同原文不再请求翻译引擎。",
-        switchEl(c.persist_cache, (on) => saveConfig((x) => (x.persist_cache = on), on ? "已开启译文库" : "已关闭译文库")),
+        t("general.targetLang"),
+        t("general.targetLangDesc"),
+        dropdown(
+          langs().map(([val, n]) => ({ value: val, label: n, hint: val })),
+          c.target_lang,
+          (val) => saveConfig((x) => (x.target_lang = val), t("general.targetLangChanged")),
+          { width: "100%" },
+        ),
+      ),
+      row(
+        t("general.useStore"),
+        t("general.useStoreDesc"),
+        switchEl(c.persist_cache, (on) => saveConfig((x) => (x.persist_cache = on), on ? t("general.storeOn") : t("general.storeOff"))),
         true,
       ),
     ),
-    section("文件位置"),
+    section(t("general.files")),
     h(
       "div",
       { class: "card flush" },
       fileRow(
-        "配置文件",
+        "sliders",
+        t("general.configFile"),
         v.config_path,
         v.config_size,
-        "固定放在用户目录，随译启动时从这里读取。",
-        h("button", { class: "btn ghost sm", onclick: () => reveal("config") }, icon("folder"), "打开位置"),
+        t("general.configFileDesc", { app: t("app.name") }),
+        h("button", { class: "btn ghost sm", onclick: () => reveal("config") }, icon("folder"), t("general.openLocation")),
       ),
       fileRow(
-        "译文库",
+        "db",
+        t("nav.library"),
         v.db_path,
         v.db_size,
-        v.db_custom ? "已放在自定义位置。" : "",
-        h("button", { class: "btn sm", disabled: moving, onclick: () => relocate(false) }, moving ? "移动中…" : "更改位置…"),
-        v.db_custom ? h("button", { class: "btn ghost sm", disabled: moving, onclick: () => relocate(true) }, "恢复默认") : h("span"),
-        h("button", { class: "btn ghost sm", onclick: () => reveal("store") }, icon("folder"), "打开位置"),
+        v.db_custom ? t("general.storeCustom") : "",
+        h("button", { class: "btn sm", disabled: moving, onclick: () => relocate(false) }, moving ? t("general.moving") : t("general.changeLocation")),
+        v.db_custom ? h("button", { class: "btn ghost sm", disabled: moving, onclick: () => relocate(true) }, t("common.restoreDefault")) : h("span"),
+        h("button", { class: "btn ghost sm", onclick: () => reveal("store") }, icon("folder"), t("general.openLocation")),
       ),
     ),
-    h("p", { class: "desc", style: "margin:8px 2px 0" }, "翻译引擎和大模型请在“翻译引擎”页面设置。"),
+    h("p", { class: "desc", style: "margin:8px 2px 0" }, t("general.enginesHint", { page: t("nav.engines") })),
   );
 }

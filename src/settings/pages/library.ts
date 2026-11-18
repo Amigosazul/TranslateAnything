@@ -1,7 +1,8 @@
 // 译文库：搜索、改译、删除、清空
 import { invoke } from "@tauri-apps/api/core";
-import { cfg, loadStats } from "../state";
-import { confirmDialog, emptyState, errText, fmt, h, icon, pageHead, relTime, toast } from "../ui";
+import { cfg, engineInfo, loadStats } from "../state";
+import { fmtNum, t } from "../../i18n";
+import { confirmDialog, emptyState, errText, h, icon, pageHead, relTime, toast } from "../ui";
 
 interface Entry {
   lang: string;
@@ -21,7 +22,7 @@ let searchTimer = 0;
 /** 译文库页只搭一次骨架（保住搜索框里正在输入的内容），之后只刷新表格 */
 export function buildLibrary(root: HTMLElement) {
   if (built) return;
-  const search = h("input", { type: "search", placeholder: "搜索原文或译文", value: lib.keyword });
+  const search = h("input", { type: "search", placeholder: t("library.search"), value: lib.keyword });
   search.addEventListener("input", () => {
     clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => {
@@ -37,7 +38,7 @@ export function buildLibrary(root: HTMLElement) {
     queryLibrary();
   });
   root.replaceChildren(
-    pageHead("译文库", "翻译过的文字都存在这里，下次遇到相同原文直接使用、不再请求翻译引擎。改过的译文标记为手工译文，自动翻译不会覆盖；改动会立即推送到已接管的页面。"),
+    pageHead(t("library.title"), t("library.lead")),
     h(
       "div",
       { class: "card flush" },
@@ -45,8 +46,8 @@ export function buildLibrary(root: HTMLElement) {
         "div",
         { class: "toolbar" },
         h("div", { class: "grow search" }, icon("search"), search),
-        h("label", { class: "check" }, manual, "只看手工译文"),
-        h("button", { class: "btn ghost danger", onclick: clearLibrary }, icon("trash"), "清空…"),
+        h("label", { class: "check" }, manual, t("library.manualOnly")),
+        h("button", { class: "btn ghost danger", onclick: clearLibrary }, icon("trash"), t("library.clearEllipsis")),
       ),
       h("div", { id: "lib-table" }),
     ),
@@ -74,12 +75,12 @@ function renderTable() {
   const box = document.getElementById("lib-table");
   if (!box) return;
   if (lib.rows.length === 0) {
-    box.replaceChildren(emptyState(lib.keyword || lib.manualOnly ? "没有符合条件的译文" : "译文库还是空的", lib.keyword ? "search" : "box"));
+    box.replaceChildren(emptyState(lib.keyword || lib.manualOnly ? t("library.noMatch") : t("library.empty"), lib.keyword ? "search" : "box"));
     return;
   }
   const tbody = h("tbody");
   for (const r of lib.rows) {
-    const input = h("textarea", { class: "cell", rows: 1, title: "修改后按回车或移开焦点保存" });
+    const input = h("textarea", { class: "cell", rows: 1, title: t("library.editHint") });
     input.value = r.target;
     const commit = async () => {
       const v = input.value.trim();
@@ -91,8 +92,7 @@ function renderTable() {
         await invoke("store_set", { source: r.source, target: v });
         r.target = v;
         r.manual = true;
-        r.engine = "手工";
-        toast("已改译，已接管的页面会立即更新");
+        toast(t("library.toast.edited"));
         renderTable();
         loadStats();
       } catch (e) {
@@ -112,8 +112,8 @@ function renderTable() {
         { class: r.manual ? "manual" : "" },
         h("td", { class: "src-text" }, r.source),
         h("td", {}, input),
-        h("td", {}, h("span", { class: `tag${r.manual ? " accent" : ""}` }, r.manual ? "手工" : r.engine)),
-        h("td", { class: "small muted num" }, String(r.hits)),
+        h("td", {}, h("span", { class: `tag${r.manual ? " accent" : ""}` }, r.manual ? t("library.manual") : engineInfo(r.engine)?.name ?? r.engine)),
+        h("td", { class: "small muted num" }, fmtNum(r.hits)),
         h("td", { class: "small muted" }, relTime(r.used_at)),
         h(
           "td",
@@ -122,12 +122,12 @@ function renderTable() {
             "button",
             {
               class: "icon-btn",
-              title: "删除（已接管的页面会重新翻译这段文字）",
-              "aria-label": "删除",
+              title: t("library.deleteHint"),
+              "aria-label": t("common.delete"),
               onclick: async () => {
                 try {
                   await invoke("store_delete", { sources: [r.source] });
-                  toast("已删除，页面会重新翻译这段文字");
+                  toast(t("library.toast.deleted"));
                   queryLibrary();
                   loadStats();
                 } catch (e) {
@@ -153,11 +153,11 @@ function renderTable() {
         h(
           "tr",
           {},
-          h("th", { style: "width:36%" }, "原文"),
-          h("th", {}, "译文"),
-          h("th", { style: "width:92px" }, "来源"),
-          h("th", { style: "width:60px" }, "命中"),
-          h("th", { style: "width:92px" }, "最近使用"),
+          h("th", { style: "width:36%" }, t("library.col.source")),
+          h("th", {}, t("library.col.target")),
+          h("th", { style: "width:92px" }, t("library.col.engine")),
+          h("th", { style: "width:60px" }, t("library.col.hits")),
+          h("th", { style: "width:92px" }, t("library.col.used")),
           h("th", { style: "width:52px" }, ""),
         ),
       ),
@@ -166,13 +166,13 @@ function renderTable() {
     h(
       "div",
       { class: "row spread pager" },
-      h("span", { class: "muted small" }, `共 ${fmt(lib.total)} 条（目标语言 ${cfg().target_lang}）`),
+      h("span", { class: "muted small" }, t("library.total", { n: fmtNum(lib.total), lang: cfg().target_lang })),
       h(
         "div",
         { class: "row" },
-        h("button", { class: "btn sm", disabled: cur <= 1, onclick: () => ((lib.offset -= PAGE_SIZE), queryLibrary()) }, icon("chevL"), "上一页"),
+        h("button", { class: "btn sm", disabled: cur <= 1, onclick: () => ((lib.offset -= PAGE_SIZE), queryLibrary()) }, icon("chevL"), t("library.prev")),
         h("span", { class: "small muted num" }, `${cur} / ${pages}`),
-        h("button", { class: "btn sm", disabled: cur >= pages, onclick: () => ((lib.offset += PAGE_SIZE), queryLibrary()) }, "下一页", icon("chevR")),
+        h("button", { class: "btn sm", disabled: cur >= pages, onclick: () => ((lib.offset += PAGE_SIZE), queryLibrary()) }, t("library.next"), icon("chevR")),
       ),
     ),
   );
@@ -181,20 +181,20 @@ function renderTable() {
 async function clearLibrary() {
   const keep = h("input", { type: "checkbox", checked: true });
   const ok = await confirmDialog(
-    "清空译文库？",
+    t("library.clear.title"),
     h(
       "div",
       {},
-      h("p", { class: "muted", style: "margin-top:0" }, `将删除目标语言 ${cfg().target_lang} 的译文，之后遇到这些文字会重新请求翻译引擎。已显示在页面上的译文要等页面刷新后才会更新。`),
-      h("label", { class: "check" }, keep, "保留手工译文"),
+      h("p", { class: "muted", style: "margin-top:0" }, t("library.clear.body", { lang: cfg().target_lang })),
+      h("label", { class: "check" }, keep, t("library.clear.keepManual")),
     ),
-    "清空",
+    t("library.clear.ok"),
     true,
   );
   if (!ok) return;
   try {
     const n = await invoke<number>("store_clear", { keepManual: keep.checked });
-    toast(`已删除 ${n} 条`);
+    toast(t("library.toast.cleared", { n: fmtNum(n) }));
     lib.offset = 0;
     queryLibrary();
     loadStats();

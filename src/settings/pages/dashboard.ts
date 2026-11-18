@@ -1,11 +1,11 @@
 // 概览：仪表盘式首页，常用状态一眼看清、常用操作一步到位
 import {
-  LANGS,
   S,
   applyMethod,
   cfg,
   engineChain,
   engineInfo,
+  langs,
   llmId,
   llmReady,
   methodOf,
@@ -13,6 +13,7 @@ import {
 } from "../state";
 import { dropdown, fmt, h, icon, keys, segmented, switchEl, type Child, type IconName } from "../ui";
 import { go } from "../nav";
+import { t } from "../../i18n";
 import { setMasterSwitch, toggleAllButton } from "./immersive";
 import { closeAllFrames, startSelect } from "./overlay";
 import { testButton } from "./engines";
@@ -26,7 +27,7 @@ function tile(ic: IconName, title: string, right: Child, ...body: Child[]): HTML
   );
 }
 
-const more = (tab: string, label = "详情") => h("button", { class: "link-btn", onclick: () => go(tab) }, label, icon("arrow"));
+const more = (tab: string, label = t("dash.details")) => h("button", { class: "link-btn", onclick: () => go(tab) }, label, icon("arrow"));
 
 export function renderDashboard(root: HTMLElement) {
   const c = cfg();
@@ -41,31 +42,31 @@ export function renderDashboard(root: HTMLElement) {
   // ── 悬浮窗模式 ──
   const overlay = tile(
     "frame",
-    "悬浮窗模式",
+    t("nav.overlay"),
     more("overlay"),
-    h("div", { class: "tile-big" }, h("b", {}, String(S.frames)), h("span", {}, "个翻译框打开中")),
-    h("div", { class: "tile-line" }, "快捷键 ", keys(c.hotkey)),
+    h("div", { class: "tile-big" }, h("b", {}, String(S.frames)), h("span", {}, t("dash.framesOpen"))),
+    h("div", { class: "tile-line" }, t("dash.hotkey"), " ", keys(c.hotkey)),
     h(
       "div",
       { class: "tile-actions" },
-      h("button", { class: "btn primary sm", onclick: startSelect }, icon("frame"), "开始框选"),
-      h("button", { class: "btn ghost sm", disabled: S.frames === 0, onclick: closeAllFrames }, "全部关闭"),
+      h("button", { class: "btn primary sm", onclick: startSelect }, icon("frame"), t("overlayPage.start")),
+      h("button", { class: "btn ghost sm", disabled: S.frames === 0, onclick: closeAllFrames }, t("overlayPage.closeAll")),
     ),
   );
 
   // ── 沉浸模式 ──
   const immersive = tile(
     "apps",
-    "沉浸模式",
+    t("nav.immersive"),
     switchEl(im.enabled, setMasterSwitch),
     h(
       "div",
       { class: "tile-big" },
       h("b", {}, `${attached.length}`),
-      h("span", {}, im.enabled ? `/ ${im.targets.length} 个应用已接管` : "总开关已关闭"),
+      h("span", {}, im.enabled ? t("dash.appsAttached", { n: im.targets.length }) : t("dash.masterOff")),
     ),
-    h("div", { class: "tile-line" }, attached.length ? `本次已回填 ${fmt(translated)} 条译文` : "启动已添加的应用即可自动接管"),
-    h("div", { class: "tile-actions" }, toggleAllButton("btn sm"), h("span", { class: "spacer" }), more("immersive", "管理应用")),
+    h("div", { class: "tile-line" }, attached.length ? t("dash.translatedThisRun", { n: fmt(translated) }) : t("dash.attachHint")),
+    h("div", { class: "tile-actions" }, toggleAllButton("btn sm"), h("span", { class: "spacer" }), more("immersive", t("dash.manageApps"))),
   );
 
   // ── 翻译方式 ──
@@ -84,7 +85,7 @@ export function renderDashboard(root: HTMLElement) {
                   const rest = engineChain(x).filter((v) => v !== id);
                   x.engine = id;
                   x.fallback = rest;
-                }, `主用引擎已改为「${engineInfo(id)?.name ?? id}」`),
+                }, t("dash.primaryChanged", { name: engineInfo(id)?.name ?? id })),
               { width: "100%" },
             ),
             testButton(primary, "btn sm"),
@@ -94,42 +95,42 @@ export function renderDashboard(root: HTMLElement) {
           h(
             "div",
             { class: "row", style: "gap:8px" },
-            h("div", { class: "grow tile-value" }, llm?.model?.trim() || "未设置模型"),
+            h("div", { class: "grow tile-value" }, llm?.model?.trim() || t("dash.noModel")),
             testButton(lid, "btn sm"),
           ),
         ];
   const translation = tile(
     "engine",
-    "翻译方式",
-    more("engines", "配置"),
+    t("dash.method"),
+    more("engines", t("dash.configure")),
     h(
       "div",
       { style: "margin-bottom:14px" },
       segmented(
         [
-          ["engine", "翻译引擎"],
-          ["llm", "大模型"],
+          ["engine", t("dash.methodEngine")],
+          ["llm", t("dash.methodLlm")],
         ],
         method,
-        (m) => saveConfig((x) => applyMethod(x, m), m === "llm" ? "已切换为大模型翻译" : "已切换为翻译引擎"),
+        (m) => saveConfig((x) => applyMethod(x, m), m === "llm" ? t("dash.switchedLlm") : t("dash.switchedEngine")),
       ),
     ),
     ...methodBody,
-    method === "llm" && !llmReady(c) && h("div", { class: "note warn", style: "margin-top:10px" }, "大模型还没配置好，翻译会先退回传统引擎。"),
+    method === "llm" && !llmReady(c) && h("div", { class: "note warn", style: "margin-top:10px" }, t("dash.llmNotReady")),
   );
 
   // ── 目标语言 ──
   const language = tile(
     "globe",
-    "目标语言",
+    t("general.targetLang"),
     null,
     dropdown(
-      LANGS.map(([v, n]) => ({ value: v, label: n, hint: v })),
+      langs().map(([v, n]) => ({ value: v, label: n, hint: v })),
       c.target_lang,
-      (v) => saveConfig((x) => (x.target_lang = v), "目标语言已更改"),
+      (v) => saveConfig((x) => (x.target_lang = v), t("general.targetLangChanged")),
       { width: "100%" },
     ),
-    h("div", { class: "tile-line" }, "悬浮窗和沉浸模式都翻译成这种语言。"),
+    h("div", { class: "tile-line" }, t("dash.targetLangHint")),
   );
 
   // ── 大模型 ──
@@ -139,25 +140,25 @@ export function renderDashboard(root: HTMLElement) {
   } catch {
     host = llm?.base_url ?? "";
   }
-  const model = h("input", { type: "text", value: llm?.model ?? "", placeholder: "例如 gpt-4o-mini", "data-k": "dash-model", spellcheck: false });
+  const model = h("input", { type: "text", value: llm?.model ?? "", placeholder: t("dash.modelPlaceholder"), "data-k": "dash-model", spellcheck: false });
   model.addEventListener("change", () =>
     saveConfig((x) => {
       const p = (x.engines[lid] ??= { base_url: "", api_key: "", region: "", model: "", proxy: null });
       p.model = model.value.trim();
-    }, "模型已更改"),
+    }, t("dash.modelChanged")),
   );
   const llmTile = tile(
     "sparkle",
-    "大模型",
-    more("engines", "配置"),
-    h("label", { class: "field" }, h("span", {}, "模型"), model),
+    t("dash.methodLlm"),
+    more("engines", t("dash.configure")),
+    h("label", { class: "field" }, h("span", {}, t("dash.model")), model),
     h(
       "div",
       { class: "kv" },
-      h("span", {}, "接口"),
-      h("b", { title: llm?.base_url ?? "" }, host || "未设置"),
-      h("span", {}, "密钥"),
-      h("b", {}, llm?.api_key?.trim() ? "已填写" : "未填写"),
+      h("span", {}, t("dash.endpoint")),
+      h("b", { title: llm?.base_url ?? "" }, host || t("common.notSet")),
+      h("span", {}, t("dash.apiKey")),
+      h("b", {}, llm?.api_key?.trim() ? t("dash.keyFilled") : t("dash.keyEmpty")),
     ),
   );
 
@@ -165,19 +166,19 @@ export function renderDashboard(root: HTMLElement) {
   const st = S.stats;
   const store = tile(
     "db",
-    "译文库与术语",
+    t("dash.store"),
     more("library"),
     h(
       "div",
       { class: "tile-metrics" },
-      h("div", {}, h("b", {}, st ? fmt(st.total) : "—"), h("span", {}, "条译文")),
-      h("div", {}, h("b", {}, st ? fmt(st.hits) : "—"), h("span", {}, "次直接命中")),
-      h("div", {}, h("b", {}, String(Object.keys(c.glossary).length)), h("span", {}, "条自定义术语")),
+      h("div", {}, h("b", {}, st ? fmt(st.total) : "—"), h("span", {}, t("dash.entries"))),
+      h("div", {}, h("b", {}, st ? fmt(st.hits) : "—"), h("span", {}, t("dash.hits"))),
+      h("div", {}, h("b", {}, String(Object.keys(c.glossary).length)), h("span", {}, t("dash.terms"))),
     ),
     h(
       "div",
       { class: "tile-line" },
-      c.persist_cache ? "译文库已开启，相同原文不再请求引擎。" : "译文库已关闭，每次都会请求引擎。",
+      c.persist_cache ? t("dash.storeOn") : t("dash.storeOff"),
     ),
   );
 
@@ -185,7 +186,7 @@ export function renderDashboard(root: HTMLElement) {
     h(
       "header",
       { class: "page-head" },
-      h("div", { class: "grow" }, h("h1", {}, "概览"), h("p", { class: "lead" }, "常用开关和状态都在这里。")),
+      h("div", { class: "grow" }, h("h1", {}, t("nav.dashboard")), h("p", { class: "lead" }, t("dash.lead"))),
     ),
     h("div", { class: "tiles" }, overlay, immersive, translation, language, llmTile, store),
   );

@@ -1,5 +1,9 @@
 // 框选遮罩：画选区矩形，松开鼠标后把选区（物理像素、相对本显示器左上角）回传给后端
 import { invoke } from "@tauri-apps/api/core";
+import { initI18n } from "../i18n";
+
+// 提示文字在 HTML 里用 data-i18n 标注，载入文案后自动填上
+void initI18n();
 
 const selection = document.getElementById("selection")!;
 const sizeTip = document.getElementById("size-tip")!;

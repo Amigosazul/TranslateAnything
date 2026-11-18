@@ -39,7 +39,7 @@ pub fn pick_folder(owner: isize, title: &str, initial: Option<&Path>) -> Result<
         if inited {
             CoUninitialize();
         }
-        result.map_err(|e| format!("打开文件夹选择框失败：{e}"))
+        result.map_err(|e| t!("err.dialog.pick_folder", e = e))
     }
 }
 
@@ -50,8 +50,8 @@ pub fn reveal(path: &Path) -> Result<(), String> {
         // explorer 自己解析参数，路径要整体加引号
         cmd.raw_arg(format!("/select,\"{}\"", path.display()));
     } else {
-        let dir = path.parent().filter(|d| d.is_dir()).ok_or("文件和所在文件夹都不存在")?;
+        let dir = path.parent().filter(|d| d.is_dir()).ok_or_else(|| t!("err.dialog.not_found"))?;
         cmd.arg(dir);
     }
-    cmd.spawn().map(|_| ()).map_err(|e| format!("打开资源管理器失败：{e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| t!("err.dialog.explorer", e = e))
 }

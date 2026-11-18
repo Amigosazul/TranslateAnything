@@ -12,18 +12,15 @@ import {
   testEngine,
   type ProviderConfig,
 } from "../state";
+import { t } from "../../i18n";
 import { dropdown, field, h, icon, pageHead, section, segmented } from "../ui";
 
-const FIELD_META: Record<string, { label: string; placeholder: string; secret?: boolean }> = {
-  base_url: { label: "接口地址", placeholder: "留空使用默认地址" },
-  api_key: { label: "密钥", placeholder: "在服务商后台创建", secret: true },
-  region: { label: "区域", placeholder: "例如 eastasia" },
-  model: { label: "模型", placeholder: "例如 gpt-4o-mini" },
-  proxy: { label: "代理", placeholder: "留空直连；填 system 跟随系统；或填写代理地址，如 http://127.0.0.1:7897" },
-};
+/** 可配置的参数；标签和提示文字取 engines.field.<参数>.label / .ph */
+const FIELDS = new Set(["base_url", "api_key", "region", "model", "proxy"]);
+const SECRET = new Set(["api_key"]);
 
-/** 大模型的接口地址是必填的，提示换成示例 */
-const LLM_PLACEHOLDER: Record<string, string> = { base_url: "例如 https://api.openai.com/v1" };
+/** 大模型的接口地址是必填的，提示换成示例（engines.field.<参数>.llmPh） */
+const LLM_PLACEHOLDER = new Set(["base_url"]);
 
 const blank = (): ProviderConfig => ({ base_url: "", api_key: "", region: "", model: "", proxy: null });
 
@@ -41,57 +38,57 @@ export function paramFields(id: string, fields: string[], llm = false): HTMLElem
   const p = cfg().engines[id] ?? blank();
   const grid = h("div", { class: "form-grid two" });
   for (const key of fields) {
-    const meta = FIELD_META[key];
-    if (!meta) continue;
+    if (!FIELDS.has(key)) continue;
+    const secret = SECRET.has(key);
     const value = key === "proxy" ? p.proxy ?? "" : ((p as unknown as Record<string, string>)[key] ?? "");
     const input = h("input", {
-      type: meta.secret ? "password" : "text",
+      type: secret ? "password" : "text",
       value,
-      placeholder: (llm && LLM_PLACEHOLDER[key]) || meta.placeholder,
+      placeholder: llm && LLM_PLACEHOLDER.has(key) ? t(`engines.field.${key}.llmPh`) : t(`engines.field.${key}.ph`),
       "data-k": `eng-${id}-${key}`,
       autocomplete: "off",
       spellcheck: false,
     });
     input.addEventListener("change", () => setParam(id, key, input.value));
     let control: HTMLElement = input;
-    if (meta.secret) {
-      const eye = h("button", { type: "button", class: "input-icon", title: "显示 / 隐藏", onclick: () => (input.type = input.type === "password" ? "text" : "password") }, icon("eye"));
+    if (secret) {
+      const eye = h("button", { type: "button", class: "input-icon", title: t("engines.toggleSecret"), onclick: () => (input.type = input.type === "password" ? "text" : "password") }, icon("eye"));
       control = h("div", { class: "input-wrap" }, input, eye);
     }
-    grid.append(field(meta.label, control, key === "proxy" || key === "base_url" ? "wide" : ""));
+    grid.append(field(t(`engines.field.${key}.label`), control, key === "proxy" || key === "base_url" ? "wide" : ""));
   }
   return grid;
 }
 
 /** "测试"按钮：显示延迟（绿色）或失败（红色，悬停看原因） */
 export function testButton(id: string, cls = "btn sm"): HTMLElement {
-  const t = S.tests[id];
-  const label = t?.busy
-    ? "测试中…"
-    : t?.result
-      ? `${t.result.ms} 毫秒`
-      : t?.error
-        ? "测试失败"
-        : "测试";
-  const tone = t?.busy ? "" : t?.result ? (t.result.ms > 2000 ? " slow" : " good") : t?.error ? " fail" : "";
-  const title = t?.result ? `${t.result.source}\n→ ${t.result.text}` : t?.error ?? "用一句英文试翻，测一下能否连通和耗时";
-  return h("button", { class: `${cls} test-btn${tone}`, disabled: t?.busy, title, onclick: () => testEngine(id) }, icon("bolt"), label);
+  const r = S.tests[id];
+  const label = r?.busy
+    ? t("engines.test.busy")
+    : r?.result
+      ? t("engines.test.ms", { ms: r.result.ms })
+      : r?.error
+        ? t("engines.test.failed")
+        : t("engines.test.label");
+  const tone = r?.busy ? "" : r?.result ? (r.result.ms > 2000 ? " slow" : " good") : r?.error ? " fail" : "";
+  const title = r?.result ? `${r.result.source}\n→ ${r.result.text}` : r?.error ?? t("engines.test.hint");
+  return h("button", { class: `${cls} test-btn${tone}`, disabled: r?.busy, title, onclick: () => testEngine(id) }, icon("bolt"), label);
 }
 
 /** 测试结果的说明行（失败原因或示例译文） */
 function testNote(id: string): HTMLElement | null {
-  const t = S.tests[id];
-  if (!t || t.busy) return null;
-  if (t.error) return h("div", { class: "note bad", style: "margin-top:12px" }, t.error);
-  if (t.result) return h("div", { class: "note ok", style: "margin-top:12px" }, `${t.result.source} → ${t.result.text}`);
+  const r = S.tests[id];
+  if (!r || r.busy) return null;
+  if (r.error) return h("div", { class: "note bad", style: "margin-top:12px" }, r.error);
+  if (r.result) return h("div", { class: "note ok", style: "margin-top:12px" }, `${r.result.source} → ${r.result.text}`);
   return null;
 }
 
 function tags(kind: string): HTMLElement[] {
   const info = engineInfo(kind);
   if (!info) return [];
-  const out = [h("span", { class: `tag${info.official ? " accent" : ""}` }, info.official ? "官方接口" : "免费")];
-  if (info.needs_key) out.push(h("span", { class: "tag" }, "需要密钥"));
+  const out = [h("span", { class: `tag${info.official ? " accent" : ""}` }, info.official ? t("engines.tag.official") : t("engines.tag.free"))];
+  if (info.needs_key) out.push(h("span", { class: "tag" }, t("engines.tag.needsKey")));
   return out;
 }
 
@@ -113,22 +110,22 @@ export function renderEngines(root: HTMLElement) {
       h(
         "div",
         { class: "grow" },
-        h("h3", {}, "翻译方式"),
+        h("h3", {}, t("engines.method.title")),
         h(
           "div",
           { class: "desc" },
           method === "llm"
-            ? "由大模型翻译，译文更通顺但更慢；大模型出错时自动退回下面的翻译引擎。"
-            : "由传统翻译引擎翻译，速度快、免费引擎无需配置。",
+            ? t("engines.method.llmDesc")
+            : t("engines.method.engineDesc"),
         ),
       ),
       segmented(
         [
-          ["engine", "翻译引擎"],
-          ["llm", "大模型"],
+          ["engine", t("engines.method.engine")],
+          ["llm", t("engines.method.llm")],
         ],
         method,
-        (m) => saveConfig((x) => applyMethod(x, m), m === "llm" ? "已切换为大模型翻译" : "已切换为翻译引擎"),
+        (m) => saveConfig((x) => applyMethod(x, m), m === "llm" ? t("engines.toast.toLlm") : t("engines.toast.toEngine")),
       ),
     ),
   );
@@ -158,14 +155,14 @@ export function renderEngines(root: HTMLElement) {
                 x.engine = id;
                 x.fallback = order.slice(1);
               }
-            }, `主用引擎已改为「${e.name}」`);
+            }, t("engines.toast.primary", { name: e.name }));
           },
         },
         h("span", { class: "radio" }),
         h(
           "div",
           { class: "grow" },
-          h("div", { class: "engine-name" }, e.name, ...tags(id), fbIndex >= 0 && h("span", { class: "tag" }, `回退第 ${fbIndex + 1}`)),
+          h("div", { class: "engine-name" }, e.name, ...tags(id), fbIndex >= 0 && h("span", { class: "tag" }, t("engines.fallbackNth", { n: fbIndex + 1 }))),
           h("div", { class: "desc" }, e.note),
         ),
       ),
@@ -183,8 +180,8 @@ export function renderEngines(root: HTMLElement) {
   // ── 回退顺序 ──
   const fbCard = h("div", { class: "card" });
   fbCard.append(
-    h("h3", {}, method === "llm" ? "大模型出错时依次尝试" : "主用引擎出错时依次尝试"),
-    h("div", { class: "desc" }, "按顺序逐个尝试，直到有一个成功。"),
+    h("h3", {}, method === "llm" ? t("engines.fallback.titleLlm") : t("engines.fallback.title")),
+    h("div", { class: "desc" }, t("engines.fallback.desc")),
   );
   const order = method === "llm" ? chain : fallback;
   const fbList = h("div", { class: "fb-list" });
@@ -209,14 +206,14 @@ export function renderEngines(root: HTMLElement) {
         { class: "fb-item" },
         h("span", { class: "fb-num" }, String(i + 1)),
         h("span", { class: "grow" }, engineInfo(kindOf(c, id))?.name ?? id),
-        h("button", { class: "icon-btn plain", title: "上移", disabled: i === 0, onclick: () => move(-1) }, icon("up")),
-        h("button", { class: "icon-btn plain", title: "下移", disabled: i === order.length - 1, onclick: () => move(1) }, icon("down")),
+        h("button", { class: "icon-btn plain", title: t("engines.fallback.up"), disabled: i === 0, onclick: () => move(-1) }, icon("up")),
+        h("button", { class: "icon-btn plain", title: t("engines.fallback.down"), disabled: i === order.length - 1, onclick: () => move(1) }, icon("down")),
         // 大模型方式下第一个是兜底的主力传统引擎，至少保留一个
-        !(method === "llm" && order.length === 1) && h("button", { class: "icon-btn", title: "移除", onclick: remove }, icon("x")),
+        !(method === "llm" && order.length === 1) && h("button", { class: "icon-btn", title: t("engines.fallback.remove"), onclick: remove }, icon("x")),
       ),
     );
   });
-  if (order.length === 0) fbList.append(h("div", { class: "desc", style: "padding:6px 0" }, "未设置回退，主用引擎出错时直接报错。"));
+  if (order.length === 0) fbList.append(h("div", { class: "desc", style: "padding:6px 0" }, t("engines.fallback.none")));
   const candidates = traditional.filter((e) => !chain.includes(e.id));
   fbCard.append(fbList);
   if (candidates.length)
@@ -231,7 +228,7 @@ export function renderEngines(root: HTMLElement) {
             saveConfig((x) => {
               x.fallback = [...x.fallback.filter((v) => v !== id), id];
             }, ""),
-          { placeholder: "添加回退引擎…", width: "260px" },
+          { placeholder: t("engines.fallback.add"), width: "260px" },
         ),
       ),
     );
@@ -244,7 +241,7 @@ export function renderEngines(root: HTMLElement) {
     h(
       "div",
       { class: "row spread" },
-      h("div", { class: "grow" }, h("h3", {}, "大模型"), h("div", { class: "desc" }, "任意 OpenAI 兼容服务（官方、各家云服务或本地部署）。")),
+      h("div", { class: "grow" }, h("h3", {}, t("engines.llm.title")), h("div", { class: "desc" }, t("engines.llm.desc"))),
       testButton(lid),
     ),
     h("div", { style: "margin-top:16px" }, paramFields(lid, ["base_url", "api_key", "model", "proxy"], true)),
@@ -252,12 +249,12 @@ export function renderEngines(root: HTMLElement) {
   );
 
   root.replaceChildren(
-    pageHead("翻译引擎", "选择翻译方式、主用引擎和出错时的回退顺序。修改后立即生效，命中译文库的文字不受影响。"),
+    pageHead(t("engines.title"), t("engines.lead")),
     methodCard,
-    section("翻译引擎", method === "llm" && h("span", { class: "count" }, "作为大模型的后备")),
+    section(t("engines.section.engines"), method === "llm" && h("span", { class: "count" }, t("engines.section.asBackup"))),
     engineList,
     fbCard,
-    section("大模型"),
+    section(t("engines.llm.title")),
     llmCard,
   );
 }

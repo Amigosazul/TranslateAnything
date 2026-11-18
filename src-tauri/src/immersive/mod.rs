@@ -153,16 +153,16 @@ pub fn reload(app: &AppHandle) {
                 let _ = r.stop.send(true);
             }
             let (st, msg) = match (cfg.immersive.enabled, t.enabled) {
-                (false, _) => (State::Off, "沉浸模式总开关已关闭"),
-                (true, false) => (State::Disabled, "已停用"),
-                _ => (State::NotRunning, "检测中……"),
+                (false, _) => (State::Off, t!("status.off")),
+                (true, false) => (State::Disabled, t!("status.disabled")),
+                _ => (State::NotRunning, t!("status.checking")),
             };
             let runner = Runner {
                 cfg: t.clone(),
                 key,
                 show: watch::channel(show).0,
                 stop: watch::channel(false).0,
-                status: Arc::new(Mutex::new(TargetStatus::new(t, st, msg))),
+                status: Arc::new(Mutex::new(TargetStatus::new(t, st, &msg))),
             };
             if active {
                 tauri::async_runtime::spawn(supervise(
@@ -299,19 +299,19 @@ fn probe(t: &ImmersiveTarget) -> Probe {
                 Some(p) if procs::same_path(&p, &exe) => Probe::Ready,
                 Some(p) => Probe::Other(
                     State::Conflict,
-                    format!("调试端口 {} 被其他程序占用（{}），已拒绝接管", t.port, p.display()),
+                    t!("status.port_taken", port = t.port, path = p.display()),
                 ),
                 None => Probe::Other(
                     State::Conflict,
-                    format!("调试端口 {} 被无法识别的进程（{pid}）占用，已拒绝接管", t.port),
+                    t!("status.port_unknown", port = t.port, pid = pid),
                 ),
             }
         }
         None if !t.exe.trim().is_empty() && !procs::pids_of(&exe).is_empty() => Probe::Other(
             State::NoPort,
-            "正在运行，但不是以沉浸模式启动的（没有开调试端口）".into(),
+            t!("status.no_port"),
         ),
-        None => Probe::Other(State::NotRunning, "未运行".into()),
+        None => Probe::Other(State::NotRunning, t!("status.not_running")),
     }
 }
 
@@ -356,9 +356,9 @@ async fn supervise(
                         }
                         s.state = State::Attached;
                         s.message = if s.pages.is_empty() {
-                            "已连接，暂无可翻译的页面".into()
+                            t!("status.attached_empty")
                         } else {
-                            format!("已接管 {} 个页面", s.pages.len())
+                            t!("status.attached", n = s.pages.len())
                         };
                     }
                     for p in new_pages {
@@ -376,7 +376,7 @@ async fn supervise(
                 Err(e) => {
                     let mut s = status.lock().unwrap();
                     s.state = State::Conflict;
-                    s.message = format!("调试端口 {} 已打开，但读取页面列表失败：{e}", t.port);
+                    s.message = t!("status.list_failed", port = t.port, e = e);
                 }
             },
             Probe::Other(state, message) => {

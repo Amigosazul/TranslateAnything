@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>随译</title>
+    <title data-i18n="app.name"></title>
     <link rel="stylesheet" href="/src/frame/frame.css" />
   </head>
   <body>
@@ -23,10 +23,10 @@
     <!-- 工具条（右上角，鼠标进入翻译框时显示） -->
     <div id="toolbar">
       <span id="status" title=""></span>
-      <button id="btn-move" title="按住拖动">⠿</button>
-      <button id="btn-original" title="显示原文">原</button>
-      <button id="btn-pause" title="暂停实时翻译">❚❚</button>
-      <button id="btn-close" title="关闭">✕</button>
+      <button id="btn-move" data-i18n-title="frame.move">⠿</button>
+      <button id="btn-original" data-i18n-title="frame.show_original" data-i18n="frame.original_label"></button>
+      <button id="btn-pause" data-i18n-title="frame.pause">❚❚</button>
+      <button id="btn-close" data-i18n-title="frame.close">✕</button>
     </div>
     <div id="error" hidden></div>
     <script type="module" src="/src/frame/main.ts"></script>

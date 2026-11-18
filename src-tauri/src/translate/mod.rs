@@ -32,9 +32,9 @@ pub enum TranslateError {
 impl fmt::Display for TranslateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Config(m) => write!(f, "配置错误：{m}"),
-            Self::Network(m) => write!(f, "网络错误：{m}"),
-            Self::Api(m) => write!(f, "服务返回错误：{m}"),
+            Self::Config(m) => f.write_str(&t!("err.engine.config", m = m)),
+            Self::Network(m) => f.write_str(&t!("err.engine.network", m = m)),
+            Self::Api(m) => f.write_str(&t!("err.engine.api", m = m)),
         }
     }
 }
@@ -57,11 +57,13 @@ pub trait Translator: Send + Sync {
 
 // ───────────────────────── 引擎清单 ─────────────────────────
 
-/// 引擎元信息，供设置界面渲染（M3）
+/// 引擎元信息，供设置界面渲染（M3）。
+/// `name` / `note` 存的是文案键，序列化时按当前界面语言换成文字
 #[derive(Debug, Serialize)]
 pub struct EngineInfo {
     /// 即配置里的 `type`
     pub id: &'static str,
+    #[serde(serialize_with = "localized")]
     pub name: &'static str,
     /// 是否必须填写 api_key
     pub needs_key: bool,
@@ -69,73 +71,78 @@ pub struct EngineInfo {
     pub official: bool,
     /// 该引擎会用到的配置字段
     pub fields: &'static [&'static str],
+    #[serde(serialize_with = "localized")]
     pub note: &'static str,
+}
+
+fn localized<S: serde::Serializer>(key: &&'static str, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&t!(key))
 }
 
 pub const CATALOG: &[EngineInfo] = &[
     EngineInfo {
         id: "edge",
-        name: "微软翻译（免费）",
+        name: "engine.edge.name",
         needs_key: false,
         official: false,
         fields: &["proxy"],
-        note: "Edge 浏览器内置翻译接口，失败自动回退 Bing 网页版；国内可直连",
+        note: "engine.edge.note",
     },
     EngineInfo {
         id: "bing",
-        name: "Bing 网页翻译（免费）",
+        name: "engine.bing.name",
         needs_key: false,
         official: false,
         fields: &["proxy"],
-        note: "Bing 网页版接口；国内可直连",
+        note: "engine.bing.note",
     },
     EngineInfo {
         id: "google_free",
-        name: "Google 翻译（免费）",
+        name: "engine.google_free.name",
         needs_key: false,
         official: false,
         fields: &["base_url", "proxy"],
-        note: "国内需配置代理；调用频繁会被限流。base_url 可改为镜像",
+        note: "engine.google_free.note",
     },
     EngineInfo {
         id: "microsoft",
-        name: "微软翻译（官方 API）",
+        name: "engine.microsoft.name",
         needs_key: true,
         official: true,
         fields: &["api_key", "region", "base_url", "proxy"],
-        note: "Azure Translator 资源，免费层每月 200 万字符",
+        note: "engine.microsoft.note",
     },
     EngineInfo {
         id: "deepl",
-        name: "DeepL（官方 API）",
+        name: "engine.deepl.name",
         needs_key: true,
         official: true,
         fields: &["api_key", "base_url", "proxy"],
-        note: "免费版每月 50 万字符，:fx 结尾的 key 自动走免费端点",
+        note: "engine.deepl.note",
     },
     EngineInfo {
         id: "deeplx",
-        name: "DeepLX（自建）",
+        name: "engine.deeplx.name",
         needs_key: false,
         official: false,
         fields: &["base_url", "api_key", "proxy"],
-        note: "自建 DeepLX 服务地址，api_key 为可选的访问令牌",
+        note: "engine.deeplx.note",
     },
     EngineInfo {
         id: "google",
-        name: "Google Cloud 翻译（官方 API）",
+        name: "engine.google.name",
         needs_key: true,
         official: true,
         fields: &["api_key", "base_url", "proxy"],
-        note: "需启用 Cloud Translation API；国内需配置代理",
+        note: "engine.google.note",
     },
     EngineInfo {
         id: "openai",
-        name: "大模型（OpenAI 兼容）",
+        name: "engine.openai.name",
         needs_key: true,
         official: true,
         fields: &["base_url", "api_key", "model", "proxy"],
-        note: "任意 OpenAI 兼容服务，译文更通顺但较慢",
+        note: "engine.openai.note",
     },
 ];
 
@@ -152,20 +159,24 @@ pub fn create(kind: &str, cfg: &ProviderConfig) -> Result<Box<dyn Translator>, T
         "openai" => Box::new(openai::OpenAICompatible::new(cfg)?),
         other => {
             let ids: Vec<_> = CATALOG.iter().map(|e| e.id).collect();
-            return Err(TranslateError::Config(format!(
-                "不支持的引擎类型：{other}（可选 {}）",
-                ids.join(" / ")
+            return Err(TranslateError::Config(t!(
+                "err.engine.unsupported",
+                kind = other,
+                ids = ids.join(" / ")
             )));
         }
     })
 }
 
-fn engine_name(kind: &str) -> &str {
-    CATALOG.iter().find(|e| e.id == kind).map_or(kind, |e| e.name)
+/// 引擎的显示名（按当前界面语言）；不在清单里的原样返回
+fn engine_name(kind: &str) -> String {
+    CATALOG.iter().find(|e| e.id == kind).map_or_else(|| kind.to_string(), |e| t!(e.name))
 }
 
-/// 本地缓存全部命中时返回的"引擎名"
-pub const CACHE_ENGINE: &str = "本地缓存";
+/// 本地缓存全部命中时返回的"引擎名"（按当前界面语言）
+pub fn cache_engine() -> String {
+    t!("engine.cache")
+}
 
 /// 术语表：内置界面常用词（`glossary.json`，按目标语言）+ 配置里的 `glossary`（后者优先）。
 /// 按整条原文精确匹配（忽略首尾空白），命中的不查库也不请求引擎。
@@ -211,20 +222,21 @@ pub async fn translate_batch_with_fallback(cfg: &Config, texts: &[String]) -> Re
         }
     }
     let engine = if missing.is_empty() {
-        CACHE_ENGINE.to_string()
+        cache_engine()
     } else {
-        let (translated, engine) = translate_by_engines(cfg, &missing).await?;
+        let (translated, kind) = translate_by_engines(cfg, &missing).await?;
         let pairs: Vec<(String, String)> = missing.into_iter().zip(translated).collect();
         if cfg.persist_cache {
-            crate::store::put_many(lang, &pairs, &engine);
+            // 译文库里记引擎 id（与界面语言无关），显示时再换成当前语言的名称
+            crate::store::put_many(lang, &pairs, &kind);
         }
         found.extend(pairs);
-        engine
+        engine_name(&kind)
     };
     Ok((texts.iter().map(|t| found[t].clone()).collect(), engine))
 }
 
-/// 按配置的主引擎 + 回退顺序依次尝试批量翻译（不查缓存），返回（译文，实际使用的引擎名）
+/// 按配置的主引擎 + 回退顺序依次尝试批量翻译（不查缓存），返回（译文，实际使用的引擎类型 id）
 async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<String>, String), String> {
     let mut errors = Vec::new();
     for (id, provider) in cfg.engine_chain() {
@@ -234,13 +246,12 @@ async fn translate_by_engines(cfg: &Config, texts: &[String]) -> Result<(Vec<Str
             Err(e) => Err(e),
         };
         match result {
-            Ok(t) if t.len() == texts.len() => return Ok((t, engine_name(&kind).to_string())),
-            Ok(_) => errors.push(format!("【{}】返回的译文条数与原文不一致", engine_name(&kind))),
-            Err(e) => errors.push(format!("【{}】{e}", engine_name(&kind))),
+            Ok(t) if t.len() == texts.len() => return Ok((t, kind)),
+            Ok(_) => errors.push(t!("err.engine.count_mismatch", name = engine_name(&kind))),
+            Err(e) => errors.push(t!("err.engine.prefixed", name = engine_name(&kind), e = e)),
         }
     }
-    Err(errors.join("
-"))
+    Err(errors.join("\n"))
 }
 
 /// 引擎测试结果（设置窗口"测试"按钮）
@@ -259,7 +270,7 @@ pub async fn test_engine(cfg: &Config, id: &str) -> Result<EngineTest, String> {
     const SAMPLE: &str = "Hello! Screen text, translated anywhere.";
     let provider = cfg.engines.get(id).cloned().unwrap_or_default();
     let kind = provider.kind_or(id);
-    let name = engine_name(&kind).to_string();
+    let name = engine_name(&kind);
     let start = std::time::Instant::now();
     let text = create(&kind, &provider)
         .map_err(|e| e.to_string())?
@@ -285,7 +296,7 @@ fn build_client(cfg: &ProviderConfig) -> Result<reqwest::Client, TranslateError>
     builder = match cfg.proxy.as_deref().map(str::trim) {
         Some("system") => builder,
         Some(p) if !p.is_empty() => builder.proxy(
-            reqwest::Proxy::all(p).map_err(|e| TranslateError::Config(format!("代理地址无效：{e}")))?,
+            reqwest::Proxy::all(p).map_err(|e| TranslateError::Config(t!("err.engine.bad_proxy", e = e)))?,
         ),
         _ => builder.no_proxy(),
     };
@@ -297,14 +308,14 @@ fn build_client(cfg: &ProviderConfig) -> Result<reqwest::Client, TranslateError>
 fn require_key(cfg: &ProviderConfig, hint: &str) -> Result<String, TranslateError> {
     let key = cfg.api_key.trim();
     if key.is_empty() || key == "sk-xxx" || key.contains("在此填写") {
-        return Err(TranslateError::Config(format!("未填写 api_key。{hint}")));
+        return Err(TranslateError::Config(t!("err.engine.no_key", hint = hint)));
     }
     Ok(key.to_string())
 }
 
 fn network_err(e: reqwest::Error) -> TranslateError {
     let host = e.url().and_then(|u| u.host_str()).unwrap_or("").to_string();
-    let mut msg = if e.is_timeout() { "请求超时".to_string() } else { e.to_string() };
+    let mut msg = if e.is_timeout() { t!("err.engine.timeout") } else { e.to_string() };
     // 带上底层原因，方便排查（TLS、DNS 等）
     let mut src = std::error::Error::source(&e);
     while let Some(s) = src {
@@ -332,11 +343,11 @@ async fn send_json(req: reqwest::RequestBuilder, err_pointer: &str) -> Result<Va
             .unwrap_or_else(|| raw.chars().take(300).collect());
         return Err(TranslateError::Api(format!("HTTP {status}：{msg}")));
     }
-    value.ok_or_else(|| TranslateError::Api(format!("响应不是 JSON：{}", raw.chars().take(300).collect::<String>())))
+    value.ok_or_else(|| TranslateError::Api(t!("err.engine.not_json", body = raw.chars().take(300).collect::<String>())))
 }
 
 fn parse_err(v: &Value) -> TranslateError {
-    TranslateError::Api(format!("无法解析响应：{}", v.to_string().chars().take(300).collect::<String>()))
+    TranslateError::Api(t!("err.engine.bad_response", body = v.to_string().chars().take(300).collect::<String>()))
 }
 
 /// 表单编码（application/x-www-form-urlencoded）
@@ -447,10 +458,12 @@ mod tests {
     #[test]
     fn 清单覆盖所有引擎() {
         let cfg = ProviderConfig::default();
+        let ids: Vec<_> = CATALOG.iter().map(|e| e.id).collect();
         for e in CATALOG {
             // 只要不是"不支持的类型"即可（缺 key 之类的配置错误是预期的）
             if let Err(TranslateError::Config(m)) = create(e.id, &cfg) {
-                assert!(!m.contains("不支持"), "{}: {m}", e.id);
+                let unsupported = t!("err.engine.unsupported", kind = e.id, ids = ids.join(" / "));
+                assert_ne!(m, unsupported, "{}", e.id);
             }
         }
     }
