@@ -3,6 +3,7 @@
   const now = Math.floor(Date.now() / 1000);
   const config = {
     hotkey: "Alt+T",
+    frame_click_through: true,
     target_lang: "zh-CN",
     persist_cache: true,
     mode: "ocr",

@@ -23,6 +23,8 @@ pub struct Config {
     pub mode: String,
     /// OCR 语言标签，如 `en-US`；`auto` 表示自动挑选
     pub ocr_lang: String,
+    /// 新翻译框是否默认鼠标穿透；框内工具条只改变单个实例
+    pub frame_click_through: bool,
     /// 主用引擎 id（`engines` 里的键）
     pub engine: String,
     /// 主引擎失败后依次尝试的引擎 id
@@ -143,6 +145,7 @@ impl Default for Config {
             ui_lang: String::new(),
             mode: "ocr".into(),
             ocr_lang: "auto".into(),
+            frame_click_through: true,
             engine: "edge".into(),
             fallback: Vec::new(),
             engines: BTreeMap::new(),

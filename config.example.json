@@ -1,5 +1,6 @@
 {
   "hotkey": "Alt+T",
+  "frame_click_through": true,
   "target_lang": "zh-CN",
   "mode": "ocr",
   "ocr_lang": "auto",

@@ -1,4 +1,4 @@
-// 悬浮窗模式：框选翻译的入口、快捷键、识别方式与识别语言
+// 悬浮窗模式：框选入口、快捷键、框内鼠标操作与识别设置
 import { invoke } from "@tauri-apps/api/core";
 import { S, cfg, refresh, saveConfig } from "../state";
 import { dropdown, errText, h, hotkeyInput, icon, keys, pageHead, segmented, toast } from "../ui";
@@ -72,6 +72,22 @@ export function renderOverlay(root: HTMLElement) {
 
   const hotkey = hotkeyInput(c.hotkey, (v) => saveConfig((x) => (x.hotkey = v), t("overlayPage.hotkeySaved", { app: t("app.name") })), "overlay-hotkey");
 
+  const mouseModeLabel = t("overlayPage.mouseMode");
+  const mouseModeDesc = t("overlayPage.mouseModeDesc");
+  const mouseMode = segmented(
+    [
+      ["clickThrough", t("overlayPage.mouseModeClickThrough")],
+      ["drag", t("overlayPage.mouseModeDrag")],
+    ],
+    (c.frame_click_through ?? true) ? "clickThrough" : "drag",
+    (mode) => saveConfig((x) => (x.frame_click_through = mode === "clickThrough")),
+  );
+  mouseMode.setAttribute("aria-label", mouseModeLabel);
+  mouseMode.setAttribute("aria-description", mouseModeDesc);
+  mouseMode.querySelectorAll("button").forEach((button, i) => {
+    button.dataset.k = `overlay-mouse-mode-${i}`;
+  });
+
   const langs = S.ocrLangs;
   const langPick = dropdown(
     [
@@ -98,6 +114,7 @@ export function renderOverlay(root: HTMLElement) {
       "div",
       { class: "card flush" },
       row(t("overlayPage.hotkey"), t("overlayPage.hotkeyDesc", { app: t("app.name") }), hotkey),
+      row(mouseModeLabel, mouseModeDesc, mouseMode, true),
       row(
         t("overlayPage.mode"),
         c.mode === "vision" ? t("overlayPage.modeVisionDesc") : t("overlayPage.modeOcrDesc"),

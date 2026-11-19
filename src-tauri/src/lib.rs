@@ -102,6 +102,8 @@ pub fn run() {
             commands::frame_ready,
             commands::engine_catalog,
             live::frame_set_paused,
+            live::frame_get_click_through,
+            live::frame_set_click_through,
             settings::settings_get,
             settings::settings_save,
             settings::immersive_status,

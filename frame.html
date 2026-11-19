@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="/src/frame/frame.css" />
   </head>
   <body>
+    <!-- 玻璃层在译文下方，不接收输入 -->
+    <div id="lens" aria-hidden="true"></div>
     <!-- 译文层：按原文位置覆盖 -->
     <div id="blocks"></div>
     <!-- 边框 -->
@@ -21,14 +23,52 @@
     <div class="edge" data-dir="SouthWest"></div>
     <div class="edge" data-dir="SouthEast"></div>
     <!-- 工具条（右上角，鼠标进入翻译框时显示） -->
-    <div id="toolbar">
+    <div id="toolbar" role="group" data-i18n-aria="frame.toolbar">
       <span id="status" title=""></span>
-      <button id="btn-move" data-i18n-title="frame.move">⠿</button>
-      <button id="btn-original" data-i18n-title="frame.show_original" data-i18n="frame.original_label"></button>
-      <button id="btn-pause" data-i18n-title="frame.pause">❚❚</button>
-      <button id="btn-close" data-i18n-title="frame.close">✕</button>
+      <button type="button" id="btn-move" data-i18n-title="frame.move" data-i18n-aria="frame.move">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="currentColor" stroke="none">
+            <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
+            <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+            <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
+          </g>
+        </svg>
+      </button>
+      <button type="button" id="btn-mode" data-i18n-aria="frame.click_through" aria-disabled="true">
+        <svg class="icon-unknown" viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="currentColor" stroke="none">
+            <circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>
+          </g>
+        </svg>
+        <svg class="icon-pointer" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m5 3 14 9-6.5 1.1-3.1 6.4z"/>
+        </svg>
+        <svg class="icon-hand" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 13V6a1.5 1.5 0 0 1 3 0v5-6a1.5 1.5 0 0 1 3 0v6-4a1.5 1.5 0 0 1 3 0v5-2a1.5 1.5 0 0 1 3 0v4.5a6.5 6.5 0 0 1-6.5 6.5h-1a6 6 0 0 1-5-2.7l-3.3-5a1.6 1.6 0 0 1 2.5-2L8 13z"/>
+        </svg>
+      </button>
+      <button type="button" id="btn-original">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/>
+          <circle cx="12" cy="12" r="2.8"/>
+        </svg>
+      </button>
+      <button type="button" id="btn-pause">
+        <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 5v14M15 5v14"/>
+        </svg>
+        <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 4.5v15l12-7.5z"/>
+        </svg>
+      </button>
+      <button type="button" id="btn-close" data-i18n-title="frame.close" data-i18n-aria="frame.close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </div>
-    <div id="error" hidden></div>
+    <div id="notices">
+      <div id="mode-status" role="status"></div>
+      <div id="error" hidden></div>
+    </div>
     <script type="module" src="/src/frame/main.ts"></script>
   </body>
 </html>
