@@ -27,6 +27,9 @@ export interface ProviderConfig {
 
 export interface Config {
   hotkey: string;
+  /** 新建翻译框的默认鼠标操作：true 为穿透，false 为拖动 */
+  frame_click_through: boolean;
+  frame_corner_radius: number;
   target_lang: string;
   mode: string;
   ocr_lang: string;
@@ -140,26 +143,30 @@ let pending = 0;
 /** 是否有保存还没完成（此时 `cfg()` 可能还是改动前的配置） */
 export const saving = () => pending > 0;
 
-/** 修改配置并保存；成功后重新读取并刷新界面 */
-export function saveConfig(mutate: (c: Config) => void, okMsg: string = t("common.saved")): Promise<boolean> {
+/** 顺序保存配置，连续操作从上一次保存后的配置开始。 */
+export function saveConfig(
+  mutate: (c: Config) => void,
+  okMsg: string = t("common.saved"),
+  { redraw = true } = {},
+): Promise<boolean> {
   pending++;
-  const p = doSave(mutate, okMsg).finally(() => pending--);
-  lastSave = p;
+  const p = lastSave.then(() => doSave(mutate, okMsg, redraw)).finally(() => pending--);
+  lastSave = p.catch(() => {});
   return p;
 }
 
-async function doSave(mutate: (c: Config) => void, okMsg: string): Promise<boolean> {
+async function doSave(mutate: (c: Config) => void, okMsg: string, redraw: boolean): Promise<boolean> {
   const next = clone(S.view.config);
   mutate(next);
   try {
     await invoke("settings_save", { config: next });
     await loadView();
-    refresh();
+    if (redraw) refresh();
     if (okMsg) toast(okMsg);
     return true;
   } catch (e) {
     toast(errText(e), true);
-    refresh();
+    if (redraw) refresh();
     return false;
   }
 }

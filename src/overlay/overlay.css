@@ -16,8 +16,12 @@ body {
   position: fixed;
   box-sizing: border-box;
   border: 2px solid #2f8cff;
+  border-radius: var(--frame-radius, 0px);
   pointer-events: none;
 }
+
+/* 先载入圆角，避免拖动时选区先闪出直角再改变。 */
+#selection.radius-pending { visibility: hidden; }
 
 #size-tip {
   position: fixed;

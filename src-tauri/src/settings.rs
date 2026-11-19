@@ -27,7 +27,14 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
         .decorations(false)
         .center()
         .build()
-        .map(|_| ())
+        .map(|w| {
+            let app = app.clone();
+            w.on_window_event(move |event| {
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    let _ = app.emit("frame-corner-radius-preview", Option::<u8>::None);
+                }
+            });
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -65,8 +72,12 @@ pub fn settings_get() -> Result<SettingsView, String> {
 #[tauri::command]
 pub fn settings_save(app: AppHandle, mut config: Config) -> Result<(), String> {
     // 译文库位置只能通过 store_relocate 修改（要连同文件一起搬），这里沿用磁盘上的值
-    config.store_dir = config::load().map(|c| c.store_dir).unwrap_or_default();
+    let previous = config::load().unwrap_or_default();
+    config.store_dir = previous.store_dir;
     config::save(&config)?;
+    if config.frame_corner_radius != previous.frame_corner_radius {
+        let _ = app.emit("frame-corner-radius", config.frame_corner_radius);
+    }
     apply_ui_lang(&app, &config.ui_lang);
     immersive::reload(&app);
     Ok(())

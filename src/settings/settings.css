@@ -1835,6 +1835,18 @@ label.field > span {
   width: auto;
 }
 
+.radius-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+
+.radius-control input[type="number"] {
+  width: 88px;
+  font-variant-numeric: tabular-nums;
+}
+
 .setting-row .path {
   max-width: 420px;
   text-align: right;

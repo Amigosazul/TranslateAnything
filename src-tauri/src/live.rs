@@ -5,7 +5,7 @@
 //!   让译文跟手平移（不等 OCR）；同时在后台单独跑 OCR（同一时间只跑一个，总是识别最新画面）
 //!   → 归并段落 → 命中缓存的直接出译文，新出现的文字批量请求翻译 → 推送版面给前端按原位置覆盖渲染。
 //!   画面静止一段时间后放慢截屏频率以省电。
-//! - 悬停循环：鼠标在边缘或工具条上时临时关闭穿透，以便拖动、缩放、点击按钮。
+//! - 悬停循环：按各框的鼠标模式处理穿透，并保持边缘和工具条可操作。
 //!
 //! 坐标约定：实时循环维护"累计滚动量" `total`（自上次几何变化起，内容总共平移了多少）。
 //! 每次 OCR 记下开始时的 `total` 作为该版面的基准 `base`；前端把版面整体平移 `total - base`，
@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 /// 画面在变化时的截屏间隔（实际受截屏耗时限制，一般 30~40ms 一帧）
 const FAST_TICK: Duration = Duration::from_millis(12);
@@ -35,6 +35,8 @@ const IDLE_TICK: Duration = Duration::from_millis(100);
 const IDLE_AFTER: Duration = Duration::from_millis(800);
 /// 悬停检测间隔
 const HOVER_TICK: Duration = Duration::from_millis(40);
+/// 移动和缩放期间合并连续的窗口位置变化，优先翻译停下后的区域
+const GEOMETRY_SETTLE: Duration = Duration::from_millis(90);
 /// 画面连续这么久没变才算滚动停下
 const STILL_AFTER: Duration = Duration::from_millis(30);
 /// 变化像素比例超过该值才重新识别
@@ -45,11 +47,11 @@ const RETRY_AFTER: Duration = Duration::from_secs(3);
 const CACHE_LIMIT: usize = 3000;
 /// 边缘可拖拽缩放的宽度、工具条尺寸（CSS 像素，与前端保持一致）
 const EDGE_CSS: f64 = 6.0;
-const TOOLBAR_W_CSS: f64 = 132.0;
-const TOOLBAR_H_CSS: f64 = 30.0;
-/// 翻译框最小尺寸（物理像素）
-const MIN_W: u32 = 80;
-const MIN_H: u32 = 40;
+const TOOLBAR_W_CSS: f64 = 152.0;
+const TOOLBAR_H_CSS: f64 = 32.0;
+/// 最小尺寸（CSS 像素），保留模式与关闭按钮以及工具条下方的拖动区域
+const MIN_W: f64 = 80.0;
+const MIN_H: f64 = 56.0;
 
 #[derive(Default)]
 pub struct LiveState {
@@ -60,12 +62,31 @@ pub struct LiveState {
 #[derive(Default)]
 struct FrameCtl {
     paused: AtomicBool,
+    /// 各框独立的鼠标穿透状态，不写回全局配置
+    click_through: AtomicBool,
+    /// 当前窗口是否拦截鼠标，由悬停循环同步原生标志后更新
+    intercepting_mouse: AtomicBool,
+    /// 原生移动、缩放和 DPI 事件的计数和最新时刻，一起读取以判断何时停稳
+    geometry: Mutex<GeometryChange>,
     /// 有新译文到达，需要重新推送版面
     dirty: AtomicBool,
     /// 检测到翻页键：立即唤醒跟踪循环
     wake: tokio::sync::Notify,
     /// 后台 OCR / 翻译完成：立即唤醒跟踪循环推送结果，不必等到下一拍
     ready: tokio::sync::Notify,
+}
+
+#[derive(Clone, Copy, Default)]
+struct GeometryChange {
+    revision: u32,
+    changed_at: Option<Instant>,
+}
+
+impl GeometryChange {
+    /// 截屏只在最后一次几何变化的等待时间结束后恢复。
+    fn settle_remaining(self) -> Duration {
+        self.changed_at.map_or(Duration::ZERO, |at| GEOMETRY_SETTLE.saturating_sub(at.elapsed()))
+    }
 }
 
 /// 推送给前端的版面
@@ -125,7 +146,26 @@ fn unix_ms() -> f64 {
 pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(), String> {
     let state = app.state::<LiveState>();
     let label = format!("frame-{}", state.seq.fetch_add(1, Ordering::Relaxed) + 1);
-    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("frame.html".into()))
+    let click_through = config::load().unwrap_or_default().frame_click_through;
+    let ctl = Arc::new(FrameCtl {
+        click_through: AtomicBool::new(click_through),
+        intercepting_mouse: AtomicBool::new(!click_through),
+        ..FrameCtl::default()
+    });
+    // WebView 一加载就会查询当前模式，必须先登记状态。
+    state.frames.lock().unwrap().insert(label.clone(), ctl.clone());
+    if let Err(e) = build_frame(app, &label, x, y, w, h, &ctl) {
+        state.frames.lock().unwrap().remove(&label);
+        return Err(e);
+    }
+    tauri::async_runtime::spawn(live_loop(app.clone(), label.clone(), ctl.clone()));
+    tauri::async_runtime::spawn(hover_loop(app.clone(), label, ctl, !click_through));
+    Ok(())
+}
+
+/// 建立窗口并订阅后续的原生几何变化。
+fn build_frame(app: &AppHandle, label: &str, x: i32, y: i32, w: u32, h: u32, ctl: &Arc<FrameCtl>) -> Result<(), String> {
+    let win = WebviewWindowBuilder::new(app, label, WebviewUrl::App("frame.html".into()))
         .portable_data()
         .title(t!("app.name"))
         .decorations(false)
@@ -134,21 +174,37 @@ pub fn open_frame(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> Result<(),
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
+        .min_inner_size(MIN_W, MIN_H)
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
     crate::commands::disable_transitions(&win);
-    win.set_position(PhysicalPosition::new(x, y)).map_err(|e| e.to_string())?;
-    win.set_size(PhysicalSize::new(w.max(MIN_W), h.max(MIN_H)))
-        .map_err(|e| e.to_string())?;
-    win.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
-    win.show().map_err(|e| e.to_string())?;
-
-    let ctl = Arc::new(FrameCtl::default());
-    let ctl_for_hover = ctl.clone();
-    state.frames.lock().unwrap().insert(label.clone(), ctl.clone());
-    tauri::async_runtime::spawn(live_loop(app.clone(), label.clone(), ctl));
-    tauri::async_runtime::spawn(hover_loop(app.clone(), label, ctl_for_hover));
+    let init = || -> tauri::Result<()> {
+        win.set_position(PhysicalPosition::new(x, y))?;
+        let scale = app.monitor_from_point(x as f64, y as f64)?
+            .map_or_else(|| win.scale_factor().unwrap_or(1.0), |m| m.scale_factor());
+        win.set_size(PhysicalSize::new(
+            w.max((MIN_W * scale).ceil() as u32),
+            h.max((MIN_H * scale).ceil() as u32),
+        ))?;
+        win.set_ignore_cursor_events(ctl.click_through.load(Ordering::Relaxed))?;
+        let ctl = ctl.clone();
+        win.on_window_event(move |event| {
+            if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
+                {
+                    let mut geometry = ctl.geometry.lock().unwrap();
+                    geometry.revision = geometry.revision.wrapping_add(1);
+                    geometry.changed_at = Some(Instant::now());
+                }
+                ctl.ready.notify_one();
+            }
+        });
+        win.show()
+    };
+    if let Err(e) = init() {
+        let _ = win.destroy();
+        return Err(e.to_string());
+    }
     Ok(())
 }
 
@@ -173,7 +229,31 @@ pub fn frame_set_paused(window: WebviewWindow, state: tauri::State<'_, LiveState
     if let Some(ctl) = state.frames.lock().unwrap().get(window.label()) {
         ctl.paused.store(paused, Ordering::Relaxed);
         ctl.dirty.store(true, Ordering::Relaxed);
+        ctl.ready.notify_one();
     }
+}
+
+/// 查询发起调用的翻译框的鼠标模式，页面重新加载时也从这里恢复。
+#[tauri::command]
+pub fn frame_get_click_through(window: WebviewWindow, state: tauri::State<'_, LiveState>) -> Result<bool, String> {
+    let frames = state.frames.lock().unwrap();
+    let ctl = frames.get(window.label()).ok_or_else(|| t!("frame.unavailable"))?;
+    Ok(ctl.click_through.load(Ordering::Relaxed))
+}
+
+/// 查询全局圆角。页面先订阅变化，再读取持久化值，覆盖新建和重载的翻译框。
+#[tauri::command]
+pub fn frame_get_corner_radius() -> u8 {
+    config::load().unwrap_or_default().frame_corner_radius
+}
+
+/// 只切换当前框。悬停循环统一更新原生命中，避免两个线程同时设置窗口标志。
+#[tauri::command]
+pub fn frame_set_click_through(window: WebviewWindow, state: tauri::State<'_, LiveState>, click_through: bool) -> Result<bool, String> {
+    let frames = state.frames.lock().unwrap();
+    let ctl = frames.get(window.label()).ok_or_else(|| t!("frame.unavailable"))?;
+    ctl.click_through.store(click_through, Ordering::Relaxed);
+    Ok(click_through)
 }
 
 /// 后台任务（OCR、翻译）与实时循环之间的共享状态
@@ -200,6 +280,8 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
     let shared = Arc::new(Mutex::new(Shared::default()));
     let mut prev: Option<Frame> = None;
     let mut last_rect: Option<(i32, i32, u32, u32)> = None;
+    let mut observed_revision = ctl.geometry.lock().unwrap().revision;
+    let mut last_scale = 1.0;
     // 当前版面及其基准滚动量
     let mut blocks: Vec<Block> = Vec::new();
     let mut base = [0i32; 2];
@@ -224,47 +306,84 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
     let mut round_start: Option<Instant> = None;
 
     loop {
-        let tick = if last_change.elapsed() < IDLE_AFTER { FAST_TICK } else { IDLE_TICK };
-        // 等下一帧；期间框内有滚轮或翻页键输入就立即醒来（空闲时最多可省 100ms 起步延迟）
-        tokio::select! {
-            _ = tokio::time::sleep(tick) => {}
-            _ = ctl.wake.notified() => last_change = Instant::now(),
-            _ = frame_arrived.notified() => {}
-            _ = ctl.ready.notified() => {}
-            w = wheel_rx.recv() => {
-                if let Ok(w) = w {
-                    let mut delta = 0;
-                    let mut hit = false;
-                    for w in std::iter::once(w).chain(std::iter::from_fn(|| wheel_rx.try_recv().ok())) {
-                        let inside = last_rect.is_some_and(|(x, y, rw, rh)| {
-                            w.x >= x && w.y >= y && w.x < x + rw as i32 && w.y < y + rh as i32
-                        });
-                        if inside {
-                            hit = true;
-                            if !w.horizontal {
-                                delta += w.delta;
+        let geometry = *ctl.geometry.lock().unwrap();
+        let settling = geometry.settle_remaining();
+        if !settling.is_zero() && !ctl.paused.load(Ordering::Relaxed) {
+            // 等待期间不响应 WGC/滚轮等截屏唤醒，结束时重新读取最新的变化时刻。
+            tokio::time::sleep(settling).await;
+        } else {
+            let tick = if last_change.elapsed() < IDLE_AFTER { FAST_TICK } else { IDLE_TICK };
+            let next_capture = tokio::time::sleep(tick);
+            tokio::pin!(next_capture);
+            // 无关滚轮不重设截屏计时，否则连续滚轮会饿死同位置的画面刷新。
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut next_capture => break,
+                    _ = ctl.ready.notified() => break,
+                    _ = ctl.wake.notified() => {
+                        last_change = Instant::now();
+                        break;
+                    }
+                    _ = frame_arrived.notified() => break,
+                    w = wheel_rx.recv() => {
+                        let Ok(w) = w else { continue };
+                        let predict = ctl.click_through.load(Ordering::Relaxed)
+                            && !ctl.paused.load(Ordering::Relaxed)
+                            && !ctl.intercepting_mouse.load(Ordering::Relaxed)
+                            && observed_revision == ctl.geometry.lock().unwrap().revision;
+                        if !predict { continue; }
+                        let mut delta = 0;
+                        let mut hit = false;
+                        for w in std::iter::once(w).chain(std::iter::from_fn(|| wheel_rx.try_recv().ok())) {
+                            if last_rect.is_some_and(|r| zone_at(r, last_scale, w.x, w.y) == Zone::Inside) {
+                                hit = true;
+                                if !w.horizontal {
+                                    delta += w.delta;
+                                }
                             }
                         }
-                    }
-                    if hit {
-                        last_change = Instant::now();
-                        if delta != 0 && !ctl.paused.load(Ordering::Relaxed) {
-                            let _ = app.emit_to(&label, "wheel", WheelPayload { epoch, delta, sent: unix_ms() });
+                        if hit {
+                            last_change = Instant::now();
+                            if delta != 0 {
+                                let _ = app.emit_to(&label, "wheel", WheelPayload { epoch, delta, sent: unix_ms() });
+                            }
+                            break;
                         }
-                    } else {
-                        // 不是本框的滚轮：照常等到下一帧
-                        continue;
                     }
                 }
             }
         }
         let Some(win) = app.get_webview_window(&label) else { break };
-        if ctl.paused.load(Ordering::Relaxed) {
+        let geometry = *ctl.geometry.lock().unwrap();
+        if ctl.paused.load(Ordering::Relaxed) || !geometry.settle_remaining().is_zero() {
             continue;
         }
-        let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) else { continue };
-        let rect = (pos.x, pos.y, size.width, size.height);
-        let rect_changed = last_rect != Some(rect);
+        let revision = geometry.revision;
+        if last_rect.is_none() || observed_revision != revision {
+            let (Ok(pos), Ok(size), Ok(scale)) = (win.outer_position(), win.outer_size(), win.scale_factor()) else {
+                continue;
+            };
+            if revision != ctl.geometry.lock().unwrap().revision {
+                continue;
+            }
+            // 作废旧版面和旧位置的滚轮输入，正在跑的 OCR 按计数丢弃。
+            wheel_rx = input::subscribe();
+            observed_revision = revision;
+            last_rect = Some((pos.x, pos.y, size.width, size.height));
+            last_scale = scale;
+            epoch += 1;
+            total = [0, 0];
+            base = [0, 0];
+            blocks.clear();
+            prev = None;
+            ocr_stale = true;
+            ocr_error = None;
+            round_start = None;
+            moving = false;
+            last_change = Instant::now();
+        }
+        let rect = last_rect.expect("已读取翻译框几何位置");
 
         // 截屏 + 灰度化（阻塞操作放到线程池）
         let cap = capturer.clone();
@@ -278,6 +397,9 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             })
         })
         .await;
+        if revision != ctl.geometry.lock().unwrap().revision || ctl.paused.load(Ordering::Relaxed) {
+            continue;
+        }
         let (image, frame, ox, oy, shot_at, cap_time, gray_time) = match shot {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
@@ -287,21 +409,9 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             Err(_) => continue,
         };
 
-        let mut layout_changed = false;
+        let mut layout_changed = prev.is_none();
         let cmp_start = Instant::now();
-        if rect_changed {
-            // 移动/缩放：旧版面作废，坐标重新计起
-            epoch += 1;
-            total = [0, 0];
-            base = [0, 0];
-            blocks.clear();
-            ocr_stale = true;
-            last_change = Instant::now();
-            prev = Some(frame);
-            last_rect = Some(rect);
-            layout_changed = true;
-            moving = false;
-        } else if prev
+        if prev
             .as_ref()
             .is_none_or(|p| motion::changed_fraction(p, &frame) > CHANGE_THRESHOLD)
         {
@@ -458,7 +568,9 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
                 round_start = None;
             }
         }
-        let _ = app.emit_to(&label, "layout", payload);
+        if revision == ctl.geometry.lock().unwrap().revision && !ctl.paused.load(Ordering::Relaxed) {
+            let _ = app.emit_to(&label, "layout", payload);
+        }
     }
 
     app.state::<LiveState>().frames.lock().unwrap().remove(&label);
@@ -467,6 +579,34 @@ async fn live_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 窄框仍以边缘缩放优先，工具条之外是正文。
+    #[test]
+    fn 窄框命中区随缩放换算() {
+        let rect = (-400, 200, 120, 66);
+        let scale = 1.5;
+        assert!(zone_at(rect, scale, -401, 220) == Zone::Outside);
+        assert!(zone_at(rect, scale, -392, 209) == Zone::Edge);
+        assert!(zone_at(rect, scale, -391, 208) == Zone::Edge);
+        assert!(zone_at(rect, scale, -391, 209) == Zone::Toolbar);
+        assert!(zone_at(rect, scale, -290, 256) == Zone::Toolbar);
+        assert!(zone_at(rect, scale, -289, 256) == Zone::Edge);
+        assert!(zone_at(rect, scale, -280, 256) == Zone::Outside);
+
+        let tall = (-400, 200, 450, 300);
+        assert!(zone_at(tall, scale, -188, 230) == Zone::Inside);
+        assert!(zone_at(tall, scale, -187, 230) == Zone::Toolbar);
+        assert!(zone_at(tall, scale, -100, 257) == Zone::Inside);
+    }
+
+    /// 旧配置缺少鼠标模式时，保持默认穿透。
+    #[test]
+    fn 旧配置默认鼠标穿透() {
+        let legacy: config::Config = serde_json::from_str(r#"{"mode":"ocr"}"#).unwrap();
+        let drag: config::Config = serde_json::from_str(r#"{"frame_click_through":false}"#).unwrap();
+        assert!(legacy.frame_click_through);
+        assert!(!drag.frame_click_through);
+    }
 
     /// 真机计时（只读屏幕，不操作窗口）：连续"截屏 + 灰度化 + 变化检测 + 位移估计"的帧率，
     /// 以及画面的平均延迟（截取完成时距画面对应时刻）。TA_CAPTURE=wgc / printwindow 可强制截屏方式。
@@ -550,10 +690,28 @@ impl Zone {
     }
 }
 
-async fn hover_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
+/// 边缘优先。工具条的尺寸在窄框内与前端一起收缩。
+fn zone_at((x, y, w, h): (i32, i32, u32, u32), scale: f64, cx: i32, cy: i32) -> Zone {
+    let cx = f64::from(cx) - f64::from(x);
+    let cy = f64::from(cy) - f64::from(y);
+    let (w, h) = (f64::from(w), f64::from(h));
+    let edge = EDGE_CSS * scale;
+    if cx < 0.0 || cy < 0.0 || cx >= w || cy >= h {
+        Zone::Outside
+    } else if cx < edge || cy < edge || cx >= w - edge || cy >= h - edge {
+        Zone::Edge
+    } else if cx >= w - edge - TOOLBAR_W_CSS * scale && cy < edge + TOOLBAR_H_CSS * scale {
+        Zone::Toolbar
+    } else {
+        Zone::Inside
+    }
+}
+
+/// 保持当前鼠标手势的窗口命中状态，避免按住时把事件交给下方应用或从它手里抢走。
+async fn hover_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>, mut interactive: bool) {
     let mut zone = Zone::Outside;
-    let mut interactive = false;
     let mut nav_down = false;
+    let mut geometry_cache = None;
     loop {
         tokio::time::sleep(HOVER_TICK).await;
         let Some(win) = app.get_webview_window(&label) else { break };
@@ -563,30 +721,26 @@ async fn hover_loop(app: AppHandle, label: String, ctl: Arc<FrameCtl>) {
             ctl.wake.notify_one();
         }
         nav_down = nav;
-        let (Ok(pos), Ok(size), Ok(scale)) = (win.outer_position(), win.outer_size(), win.scale_factor()) else {
-            continue;
-        };
         let Some((cx, cy, button_down)) = capture::cursor_state() else { continue };
-        // 拖动/缩放过程中保持当前状态
-        if button_down && interactive {
+        if button_down {
             continue;
         }
-        let (l, t) = (pos.x as f64, pos.y as f64);
-        let (r, b) = (l + size.width as f64, t + size.height as f64);
-        let (cx, cy) = (cx as f64, cy as f64);
-        let edge = EDGE_CSS * scale;
-        let new_zone = if cx < l || cx >= r || cy < t || cy >= b {
-            Zone::Outside
-        } else if cx >= r - TOOLBAR_W_CSS * scale - edge && cy < t + TOOLBAR_H_CSS * scale + edge && cx < r - edge && cy > t + edge {
-            Zone::Toolbar
-        } else if cx < l + edge || cx >= r - edge || cy < t + edge || cy >= b - edge {
-            Zone::Edge
-        } else {
-            Zone::Inside
-        };
-        let want = matches!(new_zone, Zone::Edge | Zone::Toolbar);
+        let revision = ctl.geometry.lock().unwrap().revision;
+        if geometry_cache.is_none_or(|(cached, _, _)| cached != revision) {
+            let (Ok(pos), Ok(size), Ok(scale)) = (win.outer_position(), win.outer_size(), win.scale_factor()) else {
+                continue;
+            };
+            if ctl.geometry.lock().unwrap().revision != revision {
+                continue;
+            }
+            geometry_cache = Some((revision, (pos.x, pos.y, size.width, size.height), scale));
+        }
+        let (_, rect, scale) = geometry_cache.expect("已读取翻译框几何位置");
+        let new_zone = zone_at(rect, scale, cx, cy);
+        let want = !ctl.click_through.load(Ordering::Relaxed) || matches!(new_zone, Zone::Edge | Zone::Toolbar);
         if want != interactive && win.set_ignore_cursor_events(!want).is_ok() {
             interactive = want;
+            ctl.intercepting_mouse.store(interactive, Ordering::Relaxed);
         }
         if new_zone != zone {
             zone = new_zone;

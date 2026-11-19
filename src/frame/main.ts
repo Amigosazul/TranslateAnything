@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { initFrameCornerRadius } from "./appearance";
 import { ScrollFollower } from "./scroll";
 import { initI18n, t } from "../i18n";
 
@@ -64,6 +65,8 @@ const win = getCurrentWindow();
 const blocksEl = document.getElementById("blocks")!;
 const statusEl = document.getElementById("status")!;
 const errorEl = document.getElementById("error")!;
+const modeStatusEl = document.getElementById("mode-status")!;
+const btnMode = document.getElementById("btn-mode")!;
 const btnPause = document.getElementById("btn-pause")!;
 const btnOriginal = document.getElementById("btn-original")!;
 
@@ -74,6 +77,12 @@ const TIGHT_LINE = 1.2;
 
 let paused = false;
 let showOriginal = false;
+/** 交互模式只以本窗口后端返回的值为准；未读到时不启用整框拖动。 */
+let clickThrough: boolean | null = null;
+let modePending = false;
+let interactionError: string | null = null;
+let modeChangedAt = 0;
+let modeNoticeTimer: number | undefined;
 /** 当前版面所属的几何变化计数、基准滚动量、最新累计滚动量（物理像素） */
 let epoch = -1;
 /** 翻译框移动/缩放后，丢弃计数小于该值的消息 */
@@ -213,39 +222,95 @@ function render(layout: Layout) {
   lastLayout = layout;
   updateStatus(layout);
   errorEl.textContent = layout.error ?? "";
-  errorEl.hidden = !layout.error || !document.body.classList.contains("hover");
+  errorEl.hidden = !layout.error;
 }
 
-listen<Layout>("layout", (e) => render(e.payload));
+const layoutListener = listen<Layout>("layout", (e) => render(e.payload));
 
-// 版面事件不等文案；先到的版面在文案载入后补上状态提示
-initI18n().then(() => {
-  if (lastLayout) updateStatus(lastLayout);
-});
+function updateModeUi() {
+  const dragMode = clickThrough === false;
+  document.body.classList.toggle("drag-mode", dragMode);
+  document.body.classList.toggle("interaction-error", interactionError !== null);
+  btnMode.classList.toggle("on", clickThrough === true);
+  btnMode.setAttribute("aria-disabled", String(modePending));
+  if (clickThrough !== null) btnMode.setAttribute("aria-pressed", String(clickThrough));
+
+  const showNotice = modeNoticeTimer !== undefined;
+  const modeStatus = !showNotice || clickThrough === null ? "" : t(dragMode ? "frame.drag_on" : "frame.click_through_on");
+  const error = interactionError === null ? "" : t("frame.interaction_error", { e: interactionError });
+  document.body.classList.toggle("mode-notice", showNotice);
+  btnMode.title = error || (clickThrough === null
+    ? t("frame.click_through")
+    : t(dragMode ? "frame.switch_to_click_through" : "frame.switch_to_drag"));
+  modeStatusEl.textContent = error || modeStatus;
+}
+
+async function changeMode() {
+  if (modePending) return;
+  modePending = true;
+  updateModeUi();
+  try {
+    // 未读到初始值时重试读取，不猜测原生窗口的模式。
+    const next = clickThrough === null
+      ? await invoke<boolean>("frame_get_click_through")
+      : await invoke<boolean>("frame_set_click_through", { clickThrough: !clickThrough });
+    if (clickThrough !== null && next !== clickThrough) {
+      modeChangedAt = Date.now();
+      window.clearTimeout(modeNoticeTimer);
+      modeNoticeTimer = window.setTimeout(() => {
+        modeNoticeTimer = undefined;
+        updateModeUi();
+      }, 1400);
+      // 切换命中范围时，取消尚未结束的滚轮预测并对齐最近的实测位置。
+      if (follower.active) {
+        follower.reset(follower.measured);
+        applyOffset();
+      }
+    }
+    clickThrough = next;
+    interactionError = null;
+  } catch (error) {
+    interactionError = String(error);
+  } finally {
+    modePending = false;
+    updateModeUi();
+  }
+}
+
+function updateTranslationControls() {
+  const pauseLabel = t(paused ? "frame.resume" : "frame.pause");
+  btnPause.title = pauseLabel;
+  btnPause.setAttribute("aria-label", pauseLabel);
+  btnPause.classList.toggle("on", paused);
+  const originalLabel = t(showOriginal ? "frame.show_translation" : "frame.show_original");
+  btnOriginal.title = originalLabel;
+  btnOriginal.setAttribute("aria-label", originalLabel);
+  btnOriginal.classList.toggle("on", showOriginal);
+}
 
 /** 边框线宽（物理像素），与框选遮罩的选区边框一致 */
 const BORDER_PX = 2;
-const borderEl = document.getElementById("border")!;
+const visualEl = document.getElementById("frame-visual")!;
+let borderRaf = 0;
+let viewportSize: { width: number; height: number } | undefined;
 
-/**
- * 边框按窗口的物理像素尺寸对齐。窗口尺寸来自框选的物理像素，缩放 125%/150% 时
- * 换算成 CSS 像素是小数，原先 inset:0 + 1px 线宽在右/下边落到不足一个物理像素时会被裁掉。
- */
-function fitBorder(w: number, h: number) {
-  const dpr = window.devicePixelRatio;
-  Object.assign(borderEl.style, {
-    // 取窗口客户区与网页视口中较小者：WebView 实际尺寸可能比客户区多出一两个像素被裁
-    width: `min(100%, ${w / dpr}px)`,
-    height: `min(100%, ${h / dpr}px)`,
-    borderWidth: `${BORDER_PX / dpr}px`,
+/** 窗口变化频繁时，每帧只按最后一次的物理像素尺寸设置边框与裁剪层。 */
+function fitBorder(size: { width: number; height: number }) {
+  viewportSize = size;
+  if (borderRaf) return;
+  borderRaf = requestAnimationFrame(() => {
+    borderRaf = 0;
+    const { width, height } = viewportSize!;
+    // WebView 视口实际尺寸可能略大于客户区，取较小者，防止右边和下边被裁掉。
+    visualEl.style.width = `min(100%, ${px(width)})`;
+    visualEl.style.height = `min(100%, ${px(height)})`;
+    visualEl.style.setProperty("--frame-stroke", px(BORDER_PX));
   });
 }
-win.innerSize().then((s) => fitBorder(s.width, s.height));
-win.onResized((e) => fitBorder(e.payload.width, e.payload.height));
-win.onScaleChanged((e) => fitBorder(e.payload.size.width, e.payload.size.height));
+const borderSize = win.innerSize().then((size) => {
+  if (!viewportSize) fitBorder(size);
+});
 
-// 首帧（边框）画出后通知后端关闭框选遮罩，避免松开鼠标时选区先消失、翻译框后出现
-requestAnimationFrame(() => requestAnimationFrame(() => invoke("frame_ready")));
 
 /** 事件从后端发出到页面收到花了多久（毫秒）：两边用同一个系统时钟 */
 function transit(sent: number) {
@@ -254,59 +319,86 @@ function transit(sent: number) {
 
 // 内容滚动：OCR 结果出来之前先整体平移现有译文
 listen<Shift>("shift", (e) => {
-  if (e.payload.epoch !== epoch) return;
+  if (e.payload.epoch < minEpoch || e.payload.epoch !== epoch) return;
   follower.onMeasured(e.payload.total, performance.now(), e.payload.age + transit(e.payload.sent));
   kick();
 });
 
 // 框内滚轮：先按学到的滚动量预测平移，不等截屏比对
 listen<{ epoch: number; delta: number; sent: number }>("wheel", (e) => {
-  if (e.payload.epoch !== epoch) return;
+  if (clickThrough !== true || modePending || e.payload.epoch < minEpoch || e.payload.epoch !== epoch || e.payload.sent < modeChangedAt) return;
   follower.onWheel(e.payload.delta, performance.now() - transit(e.payload.sent));
   kick();
 });
 
-// 悬停区域由后端轮询鼠标得出（窗口平时是鼠标穿透的，自己收不到事件）
-listen<string>("hover", (e) => {
-  const inside = e.payload !== "outside";
-  document.body.classList.toggle("hover", inside);
-  errorEl.hidden = !inside || !errorEl.textContent;
+// 由后端轮询悬停位置，穿透时页面自己收不到鼠标进入事件。
+const hoverListener = listen<string>("hover", (e) => {
+  document.body.classList.toggle("hover", e.payload !== "outside");
 });
 
 // 移动或缩放时旧译文位置已失效，先清掉，等新版面
-let clearTimer = 0;
 function onGeometryChange() {
-  // 后端检测到几何变化后会递增计数，在此之前发出的旧版面一律丢弃
+  // 同一轮移动/缩放只清理一次，拒收旧范围的布局与位移。
+  if (minEpoch > epoch) return;
   minEpoch = epoch + 1;
+  cancelAnimationFrame(rafId);
+  rafId = 0;
   blocksEl.replaceChildren();
-  window.clearTimeout(clearTimer);
 }
-win.onMoved(onGeometryChange);
-win.onResized(onGeometryChange);
+const geometryListeners = Promise.all([
+  win.onMoved(onGeometryChange),
+  win.onResized(({ payload }) => {
+    fitBorder(payload);
+    onGeometryChange();
+  }),
+  win.onScaleChanged(({ payload }) => {
+    fitBorder(payload.size);
+    onGeometryChange();
+  }),
+]);
 
-document.getElementById("btn-move")!.addEventListener("mousedown", (e) => {
-  if (e.button === 0) win.startDragging();
+// 单独处理边缘和抓手，工具条内其余区域不会触发整框拖动。
+document.body.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 || !(e.target instanceof Element)) return;
+  const edge = e.target.closest<HTMLElement>(".edge");
+  if (edge) {
+    e.preventDefault();
+    void win.startResizeDragging(edge.dataset.dir as ResizeDir).catch(console.error);
+  } else if (e.target.closest("#btn-move") ||
+    (clickThrough === false && !modePending && !e.target.closest("#toolbar"))) {
+    e.preventDefault();
+    void win.startDragging().catch(console.error);
+  }
 });
 
-document.querySelectorAll<HTMLElement>(".edge").forEach((el) => {
-  el.addEventListener("mousedown", (e) => {
-    if (e.button === 0) win.startResizeDragging(el.dataset.dir as ResizeDir);
-  });
-});
+btnMode.addEventListener("click", changeMode);
 
 btnPause.addEventListener("click", () => {
   paused = !paused;
   document.body.classList.toggle("paused", paused);
-  btnPause.textContent = paused ? "▶" : "❚❚";
-  btnPause.title = t(paused ? "frame.resume" : "frame.pause");
+  updateTranslationControls();
   invoke("frame_set_paused", { paused });
 });
 
 btnOriginal.addEventListener("click", () => {
   showOriginal = !showOriginal;
   blocksEl.classList.toggle("hidden", showOriginal);
-  btnOriginal.classList.toggle("on", showOriginal);
-  btnOriginal.title = t(showOriginal ? "frame.show_translation" : "frame.show_original");
+  updateTranslationControls();
 });
 
 document.getElementById("btn-close")!.addEventListener("click", () => win.close());
+
+// 语言切换会重载页面。每次都按后端当前模式初始化，再报告首帧以关闭框选遮罩。
+async function init() {
+  await Promise.allSettled([
+    initI18n(), borderSize, layoutListener, hoverListener, geometryListeners, changeMode(), initFrameCornerRadius(visualEl),
+  ]);
+  updateModeUi();
+  updateTranslationControls();
+  if (lastLayout) updateStatus(lastLayout);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    void invoke("frame_ready").catch(console.error);
+  }));
+}
+
+void init();
