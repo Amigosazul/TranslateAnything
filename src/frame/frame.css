@@ -39,6 +39,15 @@ body {
   overflow-wrap: anywhere;
 }
 
+.block-list {
+  display: grid;
+  align-items: start;
+}
+
+.block-marker {
+  white-space: nowrap;
+}
+
 /* 尺寸与线宽由 main.ts 按物理像素对齐设置（fitBorder），这里只是首帧兜底 */
 #border {
   position: absolute;

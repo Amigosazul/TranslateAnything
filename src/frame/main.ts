@@ -25,6 +25,7 @@ interface Block {
   fg: string;
   source: string;
   text: string;
+  marker?: { text: string; indent: number; offset: number };
 }
 
 interface Layout {
@@ -107,7 +108,7 @@ function applyFit(el: HTMLElement, f: Fit) {
  * 放不下时先把行距收紧，再逐步缩小字号。
  */
 function fitText(el: HTMLElement, b: Block) {
-  const key = `${b.text}|${b.w}|${b.h}|${b.font}|${b.pitch}|${b.weight}`;
+  const key = JSON.stringify([b.text, b.w, b.h, b.font, b.pitch, b.pad_top, b.weight, b.marker, window.devicePixelRatio]);
   const cached = fitCache.get(key);
   if (cached) {
     applyFit(el, cached);
@@ -190,7 +191,19 @@ function render(layout: Layout) {
       fontWeight: String(b.weight),
       textAlign: b.align,
     });
-    el.textContent = b.text;
+    if (b.marker) {
+      el.classList.add("block-list");
+      el.style.gridTemplateColumns = `${px(b.marker.indent)} minmax(0, 1fr)`;
+      const marker = document.createElement("span");
+      marker.className = "block-marker";
+      marker.style.paddingLeft = px(b.marker.offset);
+      marker.textContent = b.marker.text;
+      const body = document.createElement("span");
+      body.textContent = b.text;
+      el.append(marker, body);
+    } else {
+      el.textContent = b.text;
+    }
     frag.appendChild(el);
     toFit.push([el, b]);
   }

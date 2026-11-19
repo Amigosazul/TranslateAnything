@@ -53,6 +53,26 @@ struct Segment {
     /// 该行的文字色与估算字号（归并时用来区分组件）
     fg: Rgb,
     em: f32,
+    bg: Rgb,
+    marker: Option<LineMarker>,
+    orphan_dot_body_x: Option<f32>,
+    heading: bool,
+}
+
+#[derive(Debug, Clone)]
+struct LineMarker {
+    text: String,
+    body_x: f32,
+    x: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListMarker {
+    pub text: String,
+    /// 从块左边缘到列表正文起点的物理像素距离
+    pub indent: f32,
+    /// 从块左边缘到标记起点的物理像素距离
+    pub offset: f32,
 }
 
 /// 段落块：前端在 `rect` 处盖上 `bg` 色块并以 `fg` 色显示译文
@@ -60,6 +80,9 @@ struct Segment {
 pub struct Block {
     /// 原文（已合并成一段）
     pub source: String,
+    /// 列表标记单独渲染，不进入翻译文本或缓存键
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker: Option<ListMarker>,
     /// 物理像素，相对截图左上角
     pub x: f32,
     pub y: f32,
@@ -96,14 +119,23 @@ pub fn build_blocks(ocr: &OcrOutput, image: &RgbaImage, skip_cjk: bool) -> Vec<B
     for seg in &mut segments {
         let r = &seg.rect;
         let probe = Rect { x: r.x - 2.0, y: r.y - 2.0, w: r.w + 4.0, h: r.h + 4.0 };
-        seg.fg = sample_colors(image, &probe).1;
+        let (bg, fg) = sample_colors(image, &probe);
+        seg.bg = bg;
+        seg.fg = fg;
         seg.em = estimate_font(std::slice::from_ref(seg), r.h, ocr.cjk);
     }
     segments.sort_by(|a, b| a.rect.y.total_cmp(&b.rect.y));
+    recover_first_number(&mut segments, image);
+    recover_bullets(&mut segments, image);
+    mark_headings(&mut segments, image, ocr.cjk);
 
-    // 贪心归并：每个片段找一个"正下方紧邻、行高相近、字号相近、颜色相同、水平有重叠"的块接上
+    // 贪心归并：列表项、标题各自起块，普通段落沿用行高、间距和重叠判断。
     let mut groups: Vec<Vec<Segment>> = Vec::new();
     for seg in segments {
+        if seg.marker.is_some() || seg.heading {
+            groups.push(vec![seg]);
+            continue;
+        }
         let h = seg.rect.h;
         let target = groups.iter_mut().rev().find(|g| {
             let last = g.last().unwrap();
@@ -111,7 +143,12 @@ pub fn build_blocks(ocr: &OcrOutput, image: &RgbaImage, skip_cjk: bool) -> Vec<B
             let gap = seg.rect.y - last.rect.bottom();
             let overlap = seg.rect.right().min(last.rect.right()) - seg.rect.x.max(last.rect.x);
             let font_ratio = seg.em / last.em.max(1.0);
-            ratio > HEIGHT_RATIO.0
+            let first = &g[0];
+            !first.heading
+                && first.marker.as_ref().is_none_or(|m| {
+                    (seg.rect.x - m.body_x).abs() <= seg.em * 0.35
+                })
+                && ratio > HEIGHT_RATIO.0
                 && ratio < HEIGHT_RATIO.1
                 && font_ratio > FONT_RATIO.0
                 && font_ratio < FONT_RATIO.1
@@ -154,8 +191,21 @@ pub fn build_blocks(ocr: &OcrOutput, image: &RgbaImage, skip_cjk: bool) -> Vec<B
             let pad_top = if lines > 1 { (first_center - pitch / 2.0).max(0.0) } else { 0.0 };
             let stroke = stroke_width(image, &rect, bg, fg);
             let weight = weight_from_stroke(stroke, font, luma(fg) > luma(bg));
+            let marker = g[0].marker.as_ref().map(|m| ListMarker {
+                text: m.text.clone(),
+                indent: m.body_x - cover.x,
+                offset: m.x - cover.x,
+            });
+            let align = if marker.is_some() || g[0].heading {
+                "left"
+            } else if lines > 1 {
+                detect_align(&g)
+            } else {
+                boxed_align(image, &cover, bg, font)
+            };
             Some(Block {
                 source,
+                marker,
                 x: cover.x,
                 y: cover.y,
                 w: cover.w,
@@ -166,7 +216,7 @@ pub fn build_blocks(ocr: &OcrOutput, image: &RgbaImage, skip_cjk: bool) -> Vec<B
                 pitch,
                 pad_top,
                 weight,
-                align: if lines > 1 { detect_align(&g) } else { boxed_align(image, &cover, bg, font) },
+                align,
                 bg: hex(bg),
                 fg: hex(fg),
             })
@@ -181,7 +231,11 @@ fn split_line(line: &Line, cjk: bool) -> Vec<Segment> {
     let mut cur: Vec<&Word> = Vec::new();
     for w in &line.words {
         if let Some(prev) = cur.last() {
-            if w.x - (prev.x + prev.w) > SPLIT_GAP * line_h {
+            let gap = w.x - (prev.x + prev.w);
+            let after_marker = cur.len() == 1
+                && marker_prefix(&prev.text) == Some(prev.text.as_str())
+                && gap <= 2.5 * line_h;
+            if gap > SPLIT_GAP * line_h && !after_marker {
                 out.push(make_segment(&cur, cjk));
                 cur.clear();
             }
@@ -203,15 +257,28 @@ fn make_segment(words: &[&Word], cjk: bool) -> Segment {
     };
     let mut text = String::new();
     let mut metrics = Vec::with_capacity(words.len());
-    for w in words {
-        metrics.push((w.text.clone(), w.h));
-        rect = rect.union(&Rect {
-            x: w.x,
-            y: w.y,
-            w: w.w,
-            h: w.h,
-        });
-        push_word(&mut text, &w.text, cjk);
+    let prefix = marker_prefix(&words[0].text);
+    let marker = prefix.and_then(|prefix| {
+        let first = words[0];
+        let tail = &first.text[prefix.len()..];
+        let body_x = if tail.is_empty() {
+            words.get(1)?.x
+        } else {
+            // OCR 有时把标记和第一个词塞进同一个框，没有字符级坐标。
+            first.x + first.w * prefix.chars().count() as f32 / first.text.chars().count() as f32
+        };
+        Some(LineMarker { text: prefix.into(), body_x, x: first.x })
+    });
+    for (i, w) in words.iter().enumerate() {
+        rect = rect.union(&Rect { x: w.x, y: w.y, w: w.w, h: w.h });
+        let body = match &marker {
+            Some(m) if i == 0 => &w.text[m.text.len()..],
+            _ => &w.text,
+        };
+        if !body.is_empty() {
+            metrics.push((body.to_string(), w.h));
+            push_word(&mut text, body, cjk);
+        }
     }
     Segment {
         text,
@@ -219,6 +286,162 @@ fn make_segment(words: &[&Word], cjk: bool) -> Segment {
         words: metrics,
         fg: [0, 0, 0],
         em: 0.0,
+        bg: [0, 0, 0],
+        marker,
+        orphan_dot_body_x: if words[0].text == "." { words.get(1).map(|w| w.x) } else { None },
+        heading: false,
+    }
+}
+
+/// 识别行首的常见项目符号和短编号，避免把小数、版本号误作列表。
+fn marker_prefix(text: &str) -> Option<&str> {
+    let first = text.chars().next()?;
+    if matches!(first, '•' | '●' | '◦' | '○' | '▪' | '‣' | '‧' | '・' | '·') {
+        return Some(&text[..first.len_utf8()]);
+    }
+    if matches!(text, "-" | "–" | "*") {
+        return Some(text);
+    }
+    let paren = first == '(';
+    let start = usize::from(paren);
+    let digits = text[start..].bytes().take_while(u8::is_ascii_digit).count();
+    if !(1..=3).contains(&digits) {
+        return None;
+    }
+    let delimiter = text[start + digits..].chars().next()?;
+    if (paren && delimiter != ')') || (!paren && !matches!(delimiter, '.' | ')' | '、' | '．')) {
+        return None;
+    }
+    let end = start + digits + delimiter.len_utf8();
+    let tail = &text[end..];
+    if delimiter == '.' && tail.starts_with(|c: char| !c.is_uppercase() && !is_cjk_char(c)) {
+        return None;
+    }
+    Some(&text[..end])
+}
+
+/// 首个编号可能只识别到句点。只有后面紧跟对齐的 2.、3.，且句点左侧有数字笔画才补回。
+fn recover_first_number(segments: &mut [Segment], image: &RgbaImage) {
+    for i in 0..segments.len() {
+        let s = &segments[i];
+        let Some(body_x) = s.orphan_dot_body_x else { continue };
+        let aligned = |n: &Segment| {
+            let x = n.marker.as_ref().map_or(n.rect.x, |m| m.body_x);
+            (x - body_x).abs() <= s.em * 0.35
+        };
+        let mut next = segments[i + 1..].iter()
+            .take_while(|n| n.rect.y - s.rect.y <= 5.0 * s.em)
+            .filter(|n| n.rect.y - s.rect.y >= 0.6 * s.em && aligned(n));
+        let (Some(second), Some(third)) = (next.next(), next.next()) else { continue };
+        let (Some(two), Some(three)) = (&second.marker, &third.marker) else { continue };
+        let pitch = second.rect.y - s.rect.y;
+        if two.text != "2." || three.text != "3."
+            || (third.rect.y - second.rect.y - pitch).abs() > s.em * 0.45
+            || (two.x - three.x).abs() > s.em * 0.25
+            || !(s.em * 0.2..=s.em * 0.9).contains(&(s.rect.x - two.x))
+        {
+            continue;
+        }
+        let left = (two.x - s.em * 0.15).max(0.0) as u32;
+        let right = (s.rect.x - 1.0).min(image.width() as f32) as u32;
+        let top = s.rect.y.max(0.0) as u32;
+        let bottom = s.rect.bottom().ceil().min(image.height() as f32) as u32;
+        let threshold = (dist(s.bg, s.fg) / 2).max(60);
+        let mut ink_left = right;
+        let mut rows_with_ink = 0;
+        for y in top..bottom {
+            if let Some(x) = (left..right).find(|&x| {
+                let [r, g, b, _] = image.get_pixel(x, y).0;
+                dist(s.bg, [r, g, b]) >= threshold
+            }) {
+                ink_left = ink_left.min(x);
+                rows_with_ink += 1;
+            }
+        }
+        if (rows_with_ink as f32) < s.em * 0.4 {
+            continue;
+        }
+        let x = ink_left as f32;
+        let s = &mut segments[i];
+        s.marker = Some(LineMarker { text: "1.".into(), body_x, x });
+        s.text = s.text[1..].trim_start().to_string();
+        s.rect.w = s.rect.right() - x;
+        s.rect.x = x;
+    }
+}
+
+/// OCR 偶尔忽略独立的实心圆点。只在行首左侧有隔开的紧凑墨点时补回，
+/// 不根据缩进凭空补标记，以免把普通续行当成新项目。
+fn recover_bullets(segments: &mut [Segment], image: &RgbaImage) {
+    for s in segments {
+        if s.marker.is_some() || !s.text.chars().any(char::is_alphabetic) {
+            continue;
+        }
+        let body_x = s.rect.x;
+        let left = (body_x - s.em * 1.6).max(0.0) as u32;
+        let right = (body_x - s.em * 0.25).max(0.0) as u32;
+        let top = s.rect.y.max(0.0) as u32;
+        let bottom = s.rect.bottom().ceil().min(image.height() as f32) as u32;
+        let threshold = (dist(s.bg, s.fg) / 2).max(60);
+        let (mut x0, mut y0, mut x1, mut y1, mut count) = (right, bottom, left, top, 0);
+        for y in top..bottom {
+            for x in left..right.min(image.width()) {
+                let [r, g, b, _] = image.get_pixel(x, y).0;
+                if dist(s.bg, [r, g, b]) >= threshold {
+                    x0 = x0.min(x);
+                    x1 = x1.max(x + 1);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y + 1);
+                    count += 1;
+                }
+            }
+        }
+        if count == 0 || x0 == left || x1 == right || y0 == top || y1 == bottom {
+            continue;
+        }
+        let w = (x1 - x0) as f32;
+        let h = (y1 - y0) as f32;
+        let mid = (y0 + y1) as f32 / 2.0;
+        if !(s.em * 0.16..=s.em * 0.50).contains(&w)
+            || !(0.7..=1.4).contains(&(w / h))
+            || (count as f32) < w * h * 0.65
+            || (mid - (s.rect.y + s.rect.h / 2.0)).abs() > s.em * 0.22
+        {
+            continue;
+        }
+        let x = x0 as f32;
+        s.marker = Some(LineMarker { text: "•".into(), body_x, x });
+        s.rect.w = s.rect.right() - x;
+        s.rect.x = x;
+    }
+}
+
+/// 截图没有标题标签。短行须比邻近正文短且笔画明显更粗，才当作独立标题。
+fn mark_headings(segments: &mut [Segment], image: &RgbaImage, cjk: bool) {
+    let ink = |s: &Segment| {
+        stroke_ratio(stroke_width(image, &s.rect, s.bg, s.fg), s.em, luma(s.fg) > luma(s.bg))
+    };
+    for i in 0..segments.len() {
+        let s = &segments[i];
+        let count = s.text.chars().count();
+        if s.marker.is_some() || count > 52 || s.text.split_whitespace().count() > 8
+            || s.text.ends_with(['.', ',', ';', '!', '?', '。', '，', '；', '！', '？', '-'])
+            || (cjk && count > 24)
+        {
+            continue;
+        }
+        let Some(next) = segments[i + 1..].iter()
+            .take_while(|n| n.rect.y - s.rect.y <= 2.4 * s.em)
+            .find(|n| n.rect.y - s.rect.y >= 0.6 * s.em
+                && (n.rect.x - s.rect.x).abs() <= 0.55 * s.em)
+        else { continue };
+        if next.rect.w < s.rect.w * 1.25 || !next.text.chars().any(char::is_alphabetic) {
+            continue;
+        }
+        let (own_ink, next_ink) = (ink(s), ink(next));
+        if own_ink >= 0.09 && next_ink >= 0.04 && own_ink >= next_ink * 1.17 {
+            segments[i].heading = true;
+        }
     }
 }
 
@@ -275,11 +498,12 @@ fn is_cjk_char(c: char) -> bool {
 /// 由笔画宽度判断字重。实测（Segoe UI / Georgia，12~28px）笔画宽度 / 字号：
 /// 浅底深字：常规体 ≈ 0.08~0.09，半粗 ≈ 0.11，粗体 ≈ 0.15~0.17；
 /// 深底浅字的抗锯齿会让笔画显得更粗，同字重的比例约为浅底的 1.25 倍，先折算回来。
+fn stroke_ratio(stroke: f32, em: f32, light_on_dark: bool) -> f32 {
+    stroke / em.max(1.0) / if light_on_dark { 1.25 } else { 1.0 }
+}
+
 fn weight_from_stroke(stroke: f32, em: f32, light_on_dark: bool) -> u16 {
-    let mut ratio = stroke / em.max(1.0);
-    if light_on_dark {
-        ratio /= 1.25;
-    }
+    let ratio = stroke_ratio(stroke, em, light_on_dark);
     if ratio > 0.13 {
         700
     } else if ratio > 0.10 {
@@ -565,6 +789,126 @@ mod tests {
         let first = blocks.iter().find(|b| b.source.starts_with("Hello")).unwrap();
         assert_eq!(first.lines, 2);
         assert_eq!(first.bg, "#ffffff");
+    }
+
+    #[test]
+    fn 列表标记独立保留且续行归入原项目() {
+        let ocr = OcrOutput {
+            cjk: false,
+            lines: vec![
+                Line { words: vec![word("•", 10.0, 10.0, 6.0), word("Open Settings", 30.0, 10.0, 110.0)] },
+                Line { words: vec![word("and choose a language.", 30.0, 31.0, 165.0)] },
+                Line { words: vec![word("2.Save changes", 10.0, 52.0, 130.0)] },
+                Line { words: vec![word("Separate paragraph.", 10.0, 73.0, 160.0)] },
+            ],
+        };
+        let img = RgbaImage::from_pixel(300, 120, Rgba([255, 255, 255, 255]));
+        let blocks = build_blocks(&ocr, &img, false);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].source, "Open Settings and choose a language.");
+        assert_eq!(blocks[0].lines, 2);
+        let marker = blocks[0].marker.as_ref().unwrap();
+        assert_eq!(marker.text, "•");
+        assert_eq!(blocks[0].x + marker.offset, 10.0);
+        assert_eq!(blocks[0].x + marker.indent, 30.0);
+        assert_eq!(blocks[1].source, "Save changes");
+        assert_eq!(blocks[1].marker.as_ref().unwrap().text, "2.");
+        assert_eq!(blocks[2].source, "Separate paragraph.");
+        assert!(blocks[2].marker.is_none());
+    }
+
+    #[test]
+    fn 只补回有独立墨点的项目符号() {
+        let ocr = OcrOutput {
+            cjk: false,
+            lines: vec![
+                Line { words: vec![word("First item", 34.0, 10.0, 95.0)] },
+                Line { words: vec![word("with a wrapped line.", 34.0, 31.0, 140.0)] },
+                Line { words: vec![word("Next item", 34.0, 52.0, 90.0)] },
+            ],
+        };
+        let mut img = RgbaImage::from_pixel(300, 100, Rgba([255, 255, 255, 255]));
+        for offset in [0, 42] {
+            for y in 18 + offset..24 + offset {
+                for x in 16..22 {
+                    img.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+                }
+            }
+        }
+        let blocks = build_blocks(&ocr, &img, false);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].source, "First item with a wrapped line.");
+        assert_eq!(blocks[1].source, "Next item");
+        for block in blocks {
+            let marker = block.marker.unwrap();
+            assert_eq!(marker.text, "•");
+            assert_eq!(block.x + marker.offset, 16.0);
+            assert_eq!(block.x + marker.indent, 34.0);
+        }
+    }
+
+    #[test]
+    fn 首个编号需相邻序号和残留笔画才补回() {
+        let ocr = OcrOutput {
+            cjk: false,
+            lines: vec![
+                Line { words: vec![word(".", 45.0, 10.0, 3.0), word("Open Settings", 54.0, 10.0, 100.0)] },
+                Line { words: vec![word("2.", 36.0, 31.0, 12.0), word("Choose a language", 54.0, 31.0, 130.0)] },
+                Line { words: vec![word("3.", 36.0, 52.0, 12.0), word("Save changes", 54.0, 52.0, 100.0)] },
+            ],
+        };
+        let mut img = RgbaImage::from_pixel(300, 100, Rgba([255, 255, 255, 255]));
+        let blocks = build_blocks(&ocr, &img, false);
+        assert!(blocks[0].marker.is_none());
+        assert_eq!(blocks[0].source, ". Open Settings");
+
+        for y in 14..26 {
+            img.put_pixel(37, y, Rgba([0, 0, 0, 255]));
+        }
+        let blocks = build_blocks(&ocr, &img, false);
+        assert_eq!(blocks[0].source, "Open Settings");
+        let marker = blocks[0].marker.as_ref().unwrap();
+        assert_eq!(marker.text, "1.");
+        assert_eq!(blocks[0].x + marker.offset, 37.0);
+        assert_eq!(blocks[0].x + marker.indent, 54.0);
+    }
+
+    #[test]
+    fn 小数和版本号保留在正文() {
+        for text in ["3.14", "2.4.1", "2027.", "v2.0", "1.em"] {
+            assert_eq!(marker_prefix(text), None, "{text}");
+        }
+        assert_eq!(marker_prefix("2)"), Some("2)"));
+        assert_eq!(marker_prefix("(3)"), Some("(3)"));
+        assert_eq!(marker_prefix("4、下一步"), Some("4、"));
+    }
+
+    #[test]
+    fn 粗体标题独立且正文自然换行仍合并() {
+        let ocr = OcrOutput {
+            cjk: false,
+            lines: vec![
+                Line { words: vec![word("Important Terms", 10.0, 10.0, 105.0)] },
+                Line { words: vec![word("Users can cancel before the trial ends", 10.0, 31.0, 250.0)] },
+                Line { words: vec![word("to avoid being charged.", 10.0, 52.0, 155.0)] },
+            ],
+        };
+        let mut img = RgbaImage::from_pixel(300, 100, Rgba([255, 255, 255, 255]));
+        for (x_end, top, thickness) in [(115, 14, 3), (260, 35, 1), (165, 56, 1)] {
+            for y in top..top + 10 {
+                for x in (10..x_end).step_by(7) {
+                    for dx in 0..thickness {
+                        img.put_pixel(x + dx, y, Rgba([0, 0, 0, 255]));
+                    }
+                }
+            }
+        }
+        let blocks = build_blocks(&ocr, &img, false);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].source, "Important Terms");
+        assert_eq!(blocks[0].weight, 700);
+        assert_eq!(blocks[1].source, "Users can cancel before the trial ends to avoid being charged.");
+        assert_eq!(blocks[1].lines, 2);
     }
 
     #[test]
