@@ -1,5 +1,6 @@
 // 框选遮罩：画选区矩形，松开鼠标后把选区（物理像素、相对本显示器左上角）回传给后端
 import { invoke } from "@tauri-apps/api/core";
+import { initFrameCornerRadius } from "../frame/appearance";
 import { initI18n } from "../i18n";
 
 // 提示文字在 HTML 里用 data-i18n 标注，载入文案后自动填上
@@ -8,6 +9,10 @@ void initI18n();
 const selection = document.getElementById("selection")!;
 const sizeTip = document.getElementById("size-tip")!;
 const hint = document.getElementById("hint")!;
+
+void initFrameCornerRadius(selection)
+  .catch((error) => console.error("读取框选圆角失败", error))
+  .finally(() => selection.classList.remove("radius-pending"));
 
 /** 选区小于该尺寸（CSS 像素）视为误点，不触发翻译 */
 const MIN_SIZE = 8;

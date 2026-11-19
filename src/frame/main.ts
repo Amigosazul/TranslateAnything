@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { initFrameCornerRadius } from "./appearance";
 import { ScrollFollower } from "./scroll";
 import { initI18n, t } from "../i18n";
 
@@ -297,16 +298,6 @@ const borderSize = win.innerSize().then((size) => {
   if (!viewportSize) fitBorder(size);
 });
 
-async function initCornerRadius() {
-  const apply = (radius: number) => visualEl.style.setProperty("--frame-radius", `${radius}px`);
-  let receivedUpdate = false;
-  await listen<number>("frame-corner-radius", ({ payload }) => {
-    receivedUpdate = true;
-    apply(payload);
-  });
-  const radius = await invoke<number>("frame_get_corner_radius");
-  if (!receivedUpdate) apply(radius);
-}
 
 /** 事件从后端发出到页面收到花了多久（毫秒）：两边用同一个系统时钟 */
 function transit(sent: number) {
@@ -387,7 +378,7 @@ document.getElementById("btn-close")!.addEventListener("click", () => win.close(
 // 语言切换会重载页面。每次都按后端当前模式初始化，再报告首帧以关闭框选遮罩。
 async function init() {
   await Promise.allSettled([
-    initI18n(), borderSize, layoutListener, hoverListener, geometryListeners, changeMode(), initCornerRadius(),
+    initI18n(), borderSize, layoutListener, hoverListener, geometryListeners, changeMode(), initFrameCornerRadius(visualEl),
   ]);
   updateModeUi();
   updateTranslationControls();

@@ -27,7 +27,14 @@ pub fn open_settings(app: &AppHandle) -> Result<(), String> {
         .decorations(false)
         .center()
         .build()
-        .map(|_| ())
+        .map(|w| {
+            let app = app.clone();
+            w.on_window_event(move |event| {
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    let _ = app.emit("frame-corner-radius-preview", Option::<u8>::None);
+                }
+            });
+        })
         .map_err(|e| e.to_string())
 }
 

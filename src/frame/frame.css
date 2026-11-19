@@ -17,10 +17,11 @@
   --bad-soft: rgb(239 76 76 / 12%);
   --frame-radius: 0px;
   --frame-stroke: 2px;
-  --lens-light: rgb(250 253 255 / 26%);
-  --lens-tint: rgb(199 222 255 / 11%);
-  --lens-shade: rgb(22 51 100 / 9%);
-  --lens-edge: rgb(255 255 255 / 42%);
+  --lens-sheen: rgb(252 255 255 / 36%);
+  --lens-tint: rgb(212 232 255 / 13%);
+  --lens-shadow: rgb(26 46 82 / 26%);
+  --lens-rim: rgb(255 255 255 / 85%);
+  --lens-reflection: rgb(245 250 255 / 52%);
   --ease: cubic-bezier(.2, .7, .25, 1);
   color-scheme: light;
 }
@@ -38,10 +39,11 @@
     --idle-dot: #5a6273;
     --bad: #ff8c8c;
     --bad-soft: rgb(239 76 76 / 17%);
-    --lens-light: rgb(199 222 255 / 20%);
-    --lens-tint: rgb(94 143 218 / 8%);
-    --lens-shade: rgb(12 23 47 / 13%);
-    --lens-edge: rgb(220 236 255 / 32%);
+    --lens-sheen: rgb(221 238 255 / 29%);
+    --lens-tint: rgb(118 155 210 / 10%);
+    --lens-shadow: rgb(3 10 25 / 36%);
+    --lens-rim: rgb(229 244 255 / 76%);
+    --lens-reflection: rgb(188 222 255 / 48%);
     color-scheme: dark;
   }
 }
@@ -72,19 +74,34 @@ body.drag-mode:active { cursor: grabbing; }
   pointer-events: none;
 }
 
-/* 内部静态高光模拟液态玻璃的折光；只过渡透明度，不模糊或重采样下方画面。 */
+/* 只淡入淡出玻璃层。窄高光和渐深的内缘模拟玻璃厚度，中央保留透视。 */
 #lens {
   position: absolute;
   --lens-inset: calc(var(--frame-stroke) + 1px);
   inset: var(--lens-inset);
   border-radius: max(0px, var(--frame-radius) - var(--lens-inset));
   background:
-    linear-gradient(180deg, var(--lens-edge), transparent 4px, transparent calc(100% - 6px), var(--lens-shade)),
-    radial-gradient(ellipse at 20% 0%, var(--lens-light), transparent 62%),
-    radial-gradient(ellipse at 95% 92%, var(--lens-tint), transparent 56%),
-    linear-gradient(140deg, var(--lens-tint), transparent 72%);
+    radial-gradient(ellipse 95% 38% at 19% -8%, var(--lens-sheen), transparent 100%),
+    radial-gradient(ellipse 85% 26% at 93% 108%, var(--lens-reflection), transparent 100%),
+    linear-gradient(152deg, var(--lens-tint), transparent 44% 60%, var(--lens-tint));
+  box-shadow:
+    inset 0 6px 13px -8px var(--lens-rim),
+    inset 3px 0 9px -6px var(--lens-reflection),
+    inset -5px -6px 13px -7px var(--lens-shadow);
   opacity: 0;
-  transition: opacity 200ms var(--ease);
+  transition: opacity 220ms var(--ease);
+}
+
+/* 用同一圆角裁出方向性反光，避免影响外框或盖住译文。 */
+#lens::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(150deg, var(--lens-rim), var(--lens-reflection) 19%, transparent 46% 69%, var(--lens-reflection) 94%, var(--lens-rim));
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
 }
 
 body.drag-mode #lens { opacity: 1; }

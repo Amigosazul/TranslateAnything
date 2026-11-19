@@ -94,7 +94,7 @@ async function switchTab(name: string) {
   const show = PAGES[name].onShow;
   if (show) {
     await show();
-    if (current === name && name !== "library") renderCurrent();
+    if (current === name && name !== "library") backgroundRender();
   }
 }
 setNav((tab) => void switchTab(tab));
