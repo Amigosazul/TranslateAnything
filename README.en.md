@@ -28,8 +28,8 @@ The interface follows your system language (Chinese and English for now, falling
 
 Press <kbd>Alt</kbd> + <kbd>T</kbd> and drag over any part of the screen. Translate Anything recognizes the text and lays the translation over the original positions, so it looks as if the app were in your language.
 
-- **Live**: translations refresh as the content scrolls or changes; frames can be moved and resized freely
-- **Click-through**: the mouse passes through the frame, so you can keep using the app underneath
+- **Live**: translations refresh as the content scrolls or changes. You can move and resize frames and adjust their corner radius in settings
+- **Click-through**: switch each frame between click-through and drag mode. In click-through mode you can keep using the app underneath
 - **Offline recognition**: text is recognized with the OCR engine built into Windows; screenshots never leave your PC
 - **Works on anything**: images, videos, scanned documents, remote desktops — if it's on screen, it can be translated
 
@@ -37,8 +37,8 @@ Press <kbd>Alt</kbd> + <kbd>T</kbd> and drag over any part of the screen. Transl
 
 For supported apps, Translate Anything replaces interface text with translations inside the app, without modifying any of the app's files. Press <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> to switch between original and translation at any time.
 
-- Currently supports desktop apps built on **Electron / Chromium** (a large share of everyday software)
-- Detects running apps and relaunches them in immersive mode with one click
+- Supports some desktop apps built on **Electron, WebView2, or CEF**
+- Detects running apps and relaunches them in immersive mode with one click. You can configure automatic relaunch for each app you add
 - Identity check: only programs you added are taken over; if a different program shows up behind the port, takeover is refused
 - Input boxes, code blocks and similar areas are skipped automatically, and you can exclude more (e.g. chat messages) yourself
 
@@ -94,7 +94,7 @@ Get the latest version from [Releases](https://github.com/Richard2091/TranslateA
 
 The portable version keeps settings and translation memory in the `data` folder next to the program and writes nothing to your user folder. Delete the `portable` file next to it to use the same user folder as the installed version.
 
-Requirements: Windows 10 / 11. The installers are not code-signed yet, so Windows may show "Windows protected your PC" on first run — click **More info → Run anyway**.
+Requirements: Windows 10 / 11. The portable version requires the WebView2 runtime. The installers are not code-signed yet, so Windows may show "Windows protected your PC" on first run — click **More info → Run anyway**.
 
 ## Quick start
 
@@ -108,13 +108,13 @@ Requirements: Windows 10 / 11. The installers are not code-signed yet, so Window
 - Text recognition runs entirely on your PC; screenshots are never uploaded
 - Recognized text is sent to the translation service you choose to get translations; Translate Anything itself collects and uploads nothing
 - Settings and translation memory are stored locally in `~/.translate-anything/` (portable version: the `data` folder next to the program)
-- Immersive mode makes the target app temporarily open a local debugging port (bound to this PC only); restart the app normally to close it
+- Immersive mode makes the target app temporarily open a local debugging port (bound to this PC only). Turn off automatic relaunch or immersive translation for that app, then restart it normally to close the port
 
 ## Roadmap
 
 - Translation filter: automatically skip code, paths, brand names and other text that shouldn't be translated
 - Visual translation: LLMs translating directly from the image
-- Seamless launch, start with Windows
+- Improve seamless launch, start with Windows
 - Live speech interpretation, speech-to-subtitles
 - More interface languages
 - macOS / Linux versions
