@@ -25,6 +25,8 @@ pub struct Config {
     pub ocr_lang: String,
     /// 新翻译框是否默认鼠标穿透；框内工具条只改变单个实例
     pub frame_click_through: bool,
+    /// 所有翻译框的显示圆角（CSS 像素），0 表示直角
+    pub frame_corner_radius: u8,
     /// 主用引擎 id（`engines` 里的键）
     pub engine: String,
     /// 主引擎失败后依次尝试的引擎 id
@@ -146,6 +148,7 @@ impl Default for Config {
             mode: "ocr".into(),
             ocr_lang: "auto".into(),
             frame_click_through: true,
+            frame_corner_radius: 0,
             engine: "edge".into(),
             fallback: Vec::new(),
             engines: BTreeMap::new(),
@@ -369,6 +372,7 @@ mod tests {
         let cfg: Config = serde_json::from_str(r#"{"immersive":{"targets":[{"name":"a","port":40000}]}}"#).unwrap();
         assert!(cfg.immersive.targets[0].enabled, "缺省为启用");
         assert!(cfg.immersive.enabled);
+        assert_eq!(cfg.frame_corner_radius, 0);
     }
 
     #[test]

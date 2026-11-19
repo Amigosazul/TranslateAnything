@@ -115,7 +115,7 @@ function applyFit(el: HTMLElement, f: Fit) {
  * 放不下时先把行距收紧，再逐步缩小字号。
  */
 function fitText(el: HTMLElement, b: Block) {
-  const key = `${b.text}|${b.w}|${b.h}|${b.font}|${b.pitch}|${b.weight}`;
+  const key = `${b.text}|${b.w}|${b.h}|${b.font}|${b.pitch}|${b.pad_top}|${b.weight}|${window.devicePixelRatio}`;
   const cached = fitCache.get(key);
   if (cached) {
     applyFit(el, cached);
@@ -276,27 +276,37 @@ function updateTranslationControls() {
 
 /** 边框线宽（物理像素），与框选遮罩的选区边框一致 */
 const BORDER_PX = 2;
-const borderEl = document.getElementById("border")!;
+const visualEl = document.getElementById("frame-visual")!;
+let borderRaf = 0;
+let viewportSize: { width: number; height: number } | undefined;
 
-/**
- * 边框按窗口的物理像素尺寸对齐。窗口尺寸来自框选的物理像素，缩放 125%/150% 时
- * 换算成 CSS 像素是小数，原先 inset:0 + 1px 线宽在右/下边落到不足一个物理像素时会被裁掉。
- */
-function fitBorder(w: number, h: number) {
-  const dpr = window.devicePixelRatio;
-  Object.assign(borderEl.style, {
-    // 取窗口客户区与网页视口中较小者：WebView 实际尺寸可能比客户区多出一两个像素被裁
-    width: `min(100%, ${w / dpr}px)`,
-    height: `min(100%, ${h / dpr}px)`,
-    borderWidth: `${BORDER_PX / dpr}px`,
+/** 窗口变化频繁时，每帧只按最后一次的物理像素尺寸设置边框与裁剪层。 */
+function fitBorder(size: { width: number; height: number }) {
+  viewportSize = size;
+  if (borderRaf) return;
+  borderRaf = requestAnimationFrame(() => {
+    borderRaf = 0;
+    const { width, height } = viewportSize!;
+    // WebView 视口实际尺寸可能略大于客户区，取较小者，防止右边和下边被裁掉。
+    visualEl.style.width = `min(100%, ${px(width)})`;
+    visualEl.style.height = `min(100%, ${px(height)})`;
+    visualEl.style.setProperty("--frame-stroke", px(BORDER_PX));
   });
 }
-const borderSize = win.innerSize().then((s) => fitBorder(s.width, s.height));
-win.onResized((e) => fitBorder(e.payload.width, e.payload.height));
-win.onScaleChanged((e) => {
-  fitBorder(e.payload.size.width, e.payload.size.height);
-  onGeometryChange();
+const borderSize = win.innerSize().then((size) => {
+  if (!viewportSize) fitBorder(size);
 });
+
+async function initCornerRadius() {
+  const apply = (radius: number) => visualEl.style.setProperty("--frame-radius", `${radius}px`);
+  let receivedUpdate = false;
+  await listen<number>("frame-corner-radius", ({ payload }) => {
+    receivedUpdate = true;
+    apply(payload);
+  });
+  const radius = await invoke<number>("frame_get_corner_radius");
+  if (!receivedUpdate) apply(radius);
+}
 
 /** 事件从后端发出到页面收到花了多久（毫秒）：两边用同一个系统时钟 */
 function transit(sent: number) {
@@ -305,14 +315,14 @@ function transit(sent: number) {
 
 // 内容滚动：OCR 结果出来之前先整体平移现有译文
 listen<Shift>("shift", (e) => {
-  if (e.payload.epoch !== epoch) return;
+  if (e.payload.epoch < minEpoch || e.payload.epoch !== epoch) return;
   follower.onMeasured(e.payload.total, performance.now(), e.payload.age + transit(e.payload.sent));
   kick();
 });
 
 // 框内滚轮：先按学到的滚动量预测平移，不等截屏比对
 listen<{ epoch: number; delta: number; sent: number }>("wheel", (e) => {
-  if (clickThrough !== true || modePending || e.payload.epoch !== epoch || e.payload.sent < modeChangedAt) return;
+  if (clickThrough !== true || modePending || e.payload.epoch < minEpoch || e.payload.epoch !== epoch || e.payload.sent < modeChangedAt) return;
   follower.onWheel(e.payload.delta, performance.now() - transit(e.payload.sent));
   kick();
 });
@@ -324,12 +334,24 @@ const hoverListener = listen<string>("hover", (e) => {
 
 // 移动或缩放时旧译文位置已失效，先清掉，等新版面
 function onGeometryChange() {
-  // 后端检测到几何变化后会递增计数，在此之前发出的旧版面一律丢弃
+  // 同一轮移动/缩放只清理一次，拒收旧范围的布局与位移。
+  if (minEpoch > epoch) return;
   minEpoch = epoch + 1;
+  cancelAnimationFrame(rafId);
+  rafId = 0;
   blocksEl.replaceChildren();
 }
-win.onMoved(onGeometryChange);
-win.onResized(onGeometryChange);
+const geometryListeners = Promise.all([
+  win.onMoved(onGeometryChange),
+  win.onResized(({ payload }) => {
+    fitBorder(payload);
+    onGeometryChange();
+  }),
+  win.onScaleChanged(({ payload }) => {
+    fitBorder(payload.size);
+    onGeometryChange();
+  }),
+]);
 
 // 单独处理边缘和抓手，工具条内其余区域不会触发整框拖动。
 document.body.addEventListener("mousedown", (e) => {
@@ -364,7 +386,9 @@ document.getElementById("btn-close")!.addEventListener("click", () => win.close(
 
 // 语言切换会重载页面。每次都按后端当前模式初始化，再报告首帧以关闭框选遮罩。
 async function init() {
-  await Promise.allSettled([initI18n(), borderSize, layoutListener, hoverListener, changeMode()]);
+  await Promise.allSettled([
+    initI18n(), borderSize, layoutListener, hoverListener, geometryListeners, changeMode(), initCornerRadius(),
+  ]);
   updateModeUi();
   updateTranslationControls();
   if (lastLayout) updateStatus(lastLayout);

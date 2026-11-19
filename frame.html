@@ -7,12 +7,12 @@
     <link rel="stylesheet" href="/src/frame/frame.css" />
   </head>
   <body>
-    <!-- 玻璃层在译文下方，不接收输入 -->
-    <div id="lens" aria-hidden="true"></div>
-    <!-- 译文层：按原文位置覆盖 -->
-    <div id="blocks"></div>
-    <!-- 边框 -->
-    <div id="border"></div>
+    <!-- 圆角裁剪只影响视觉，边角缩放热区保持原样。 -->
+    <div id="frame-visual">
+      <div id="lens" aria-hidden="true"></div>
+      <div id="blocks"></div>
+      <div id="border" aria-hidden="true"></div>
+    </div>
     <!-- 边缘缩放热区 -->
     <div class="edge" data-dir="North"></div>
     <div class="edge" data-dir="South"></div>

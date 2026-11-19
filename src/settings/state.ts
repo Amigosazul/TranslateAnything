@@ -29,6 +29,7 @@ export interface Config {
   hotkey: string;
   /** 新建翻译框的默认鼠标操作：true 为穿透，false 为拖动 */
   frame_click_through: boolean;
+  frame_corner_radius: number;
   target_lang: string;
   mode: string;
   ocr_lang: string;

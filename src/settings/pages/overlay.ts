@@ -88,6 +88,23 @@ export function renderOverlay(root: HTMLElement) {
     button.dataset.k = `overlay-mouse-mode-${i}`;
   });
 
+  const radiusLabel = t("overlayPage.cornerRadius");
+  const radiusDesc = t("overlayPage.cornerRadiusDesc");
+  const radiusValue = c.frame_corner_radius ?? 0;
+  const radii = [...new Set([0, 4, 8, 12, 16, 24, radiusValue])].sort((a, b) => a - b);
+  const radius = dropdown(
+    radii.map((n) => ({
+      value: String(n),
+      label: n === 0 ? t("overlayPage.cornerRadiusSquare") : t("overlayPage.cornerRadiusOption", { n }),
+    })),
+    String(radiusValue),
+    (v) => saveConfig((x) => (x.frame_corner_radius = Number(v))),
+    { width: "100%" },
+  );
+  radius.setAttribute("aria-label", radiusLabel);
+  radius.setAttribute("aria-description", radiusDesc);
+  radius.dataset.k = "overlay-corner-radius";
+
   const langs = S.ocrLangs;
   const langPick = dropdown(
     [
@@ -115,6 +132,7 @@ export function renderOverlay(root: HTMLElement) {
       { class: "card flush" },
       row(t("overlayPage.hotkey"), t("overlayPage.hotkeyDesc", { app: t("app.name") }), hotkey),
       row(mouseModeLabel, mouseModeDesc, mouseMode, true),
+      row(radiusLabel, radiusDesc, radius),
       row(
         t("overlayPage.mode"),
         c.mode === "vision" ? t("overlayPage.modeVisionDesc") : t("overlayPage.modeOcrDesc"),
