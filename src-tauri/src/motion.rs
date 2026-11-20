@@ -111,6 +111,8 @@ const COARSE_ROWS: usize = 96;
 const COARSE_CANDIDATES: usize = 4;
 /// 截尾平均保留最吻合的这部分行：允许最多四成的行不随滚动（固定的标题栏、侧栏）
 const TRIM_KEEP: f32 = 0.6;
+/// 截尾平均低于该值才算"这部分行几乎完全对上"（滚动时像素原样平移，真实误差接近 0）
+const TRIM_MAX_ERR: f32 = 1.5;
 
 /// 在 [-n/2, n/2] 内找使 cur[i] ≈ prev[i + s] 的 s，返回内容位移 -s。
 /// 先用抽样行粗搜所有偏移，再在最优偏移附近用全部有效行精确核对，耗时与画面高度近似线性。
@@ -124,9 +126,10 @@ fn best_offset(prev: &[Sig], cur: &[Sig]) -> Option<i32> {
     }
     let step = informative.len().div_ceil(COARSE_ROWS);
     let sampled: Vec<usize> = informative.iter().step_by(step).copied().collect();
-    // 误差取最吻合的那部分行的平均（截尾平均）：框里有固定不动的标题栏、侧栏时，
-    // 这些行在真实位移下对不上，全部平均会让估计整个失败、译文不再跟随滚动
-    let err_at = |rows: &[usize], s: i32| -> Option<f32> {
+    // 每个偏移给出两种误差：全部行的平均（用来挑偏移，位置准）和最吻合那部分行的平均（截尾平均，用来判断可不可信）。
+    // 框里有固定不动的标题栏、侧栏时，这些行在真实位移下对不上，只看全部平均会判为不可信、译文不再跟随滚动；
+    // 但截尾平均会容忍几像素的错位（同一行文字上下几像素很像），不能用它挑偏移
+    let err_at = |rows: &[usize], s: i32| -> Option<(f32, f32)> {
         let mut diffs: Vec<f32> = rows
             .iter()
             .filter_map(|&i| {
@@ -138,37 +141,40 @@ fn best_offset(prev: &[Sig], cur: &[Sig]) -> Option<i32> {
         if diffs.is_empty() || diffs.len() * 2 < rows.len() {
             return None;
         }
+        let mean = diffs.iter().sum::<f32>() / diffs.len() as f32;
         let keep = ((diffs.len() as f32 * TRIM_KEEP).ceil() as usize).clamp(1, diffs.len());
         diffs.select_nth_unstable_by(keep - 1, f32::total_cmp);
-        Some(diffs[..keep].iter().sum::<f32>() / keep as f32)
+        Some((mean, diffs[..keep].iter().sum::<f32>() / keep as f32))
     };
 
     // 粗搜：保留误差最小的几个候选（抽样可能被重复图案骗到，不能只信第一名）
     let mut candidates: Vec<(f32, i32)> = (-max..=max)
         .filter(|&s| s != 0)
-        .filter_map(|s| err_at(&sampled, s).map(|e| (e, s)))
+        .filter_map(|s| err_at(&sampled, s).map(|e| (e.0, s)))
         .collect();
     candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
     candidates.truncate(COARSE_CANDIDATES);
 
-    // 精搜：在每个候选 ±2 内用全部有效行核对
-    let err0 = err_at(&informative, 0)?;
-    let (mut best_s, mut best_err) = (0, err0);
+    // 精搜：在每个候选 ±2 内用全部有效行核对，取全部平均最小的偏移
+    let (mean0, trim0) = err_at(&informative, 0)?;
+    let mut best: Option<(i32, f32, f32)> = None;
     for &(_, c) in &candidates {
         for s in (c - 2)..=(c + 2) {
             if s == 0 || s.abs() > max {
                 continue;
             }
-            if let Some(e) = err_at(&informative, s) {
-                if e < best_err {
-                    best_err = e;
-                    best_s = s;
+            if let Some((mean, trim)) = err_at(&informative, s) {
+                if best.is_none_or(|b| mean < b.1) {
+                    best = Some((s, mean, trim));
                 }
             }
         }
     }
-    // 必须明显优于"没动"，且本身足够吻合
-    if best_s != 0 && best_err < 3.0 && best_err < err0 * 0.4 {
+    let (best_s, mean, trim) = best?;
+    // 必须明显优于"没动"，且本身足够吻合：整体都对得上，或者至少六成的行几乎完全对上
+    let whole = mean < 3.0 && mean < mean0 * 0.4;
+    let mostly = trim < TRIM_MAX_ERR && trim < trim0 * 0.4;
+    if whole || mostly {
         Some(-best_s)
     } else {
         None
